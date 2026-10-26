@@ -92,7 +92,7 @@
   /* The screening room is deployed with the same GAS URL as the other
      portals — it is inlined here so this page stays dependency-free. */
   window.PCL_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbze-8FeQeqUXpUH34nEjK2nDwpKEITVjPgszBoNtTrmr6G4bwUaqnYapqP6SeTz85MhOg/exec";
+    "https://script.google.com/macros/s/AKfycbxdY0N312upmv3VgfmG2DiVrlHdGGylv7jUk6Psa42Yp1NJotKURlJOoVpiKtly5iwe/exec";
 
   /* ---------- state ---------- */
   var state = {
