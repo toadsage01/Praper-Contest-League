@@ -347,7 +347,7 @@ function doPostLocked_(e) {
       }
     }
 
-    var sheet = getSheet_();
+    var sheet = getSheet_(true);   // ingest may bootstrap a brand-new ledger
 
     // One read pass over the ledger → everything the checks need:
     // media/URL ownership, snapshot counters and the retried-submission guard
@@ -1506,12 +1506,12 @@ function ledgerIndex_(sheet) {
  *  single source of truth: rotate a password here, deploy a new version,
  *  done. (Never move this list client-side.) */
 var ADMINS = [
-  { pass: 'pratham@123',   name: 'Pratham Jindal' },
-  { pass: 'sejal@123',     name: 'Sejal Choudhary' },
-  { pass: 'kanupriya@123', name: 'Kanupriya Srikoti' },
-  { pass: 'vikram@123',    name: 'Vikram Singh Mawari' },
-  { pass: 'lagan@123',     name: 'Lagan Garg' },
-  { pass: 'manas@123',     name: 'Manas Ranjan' }
+  { pass: '8q41my67tks9',  name: 'Pratham Jindal' },
+  { pass: 'lfi9g1y67fo9',  name: 'Lagan Garg' },
+  { pass: '40jnj8o83bd7',  name: 'Vikram Singh Mawari' },
+  { pass: '7mvs8l9xs0qd',  name: 'Sejal Choudhary' },
+  { pass: '55adv8mo00f9',  name: 'Kanupriya Srikoti' },
+  { pass: 'x898xes4shct',  name: 'Manas Ranjan' }
 ];
 
 /** Look an admin up by password; null when the password matches nobody. */
@@ -2699,22 +2699,87 @@ function getSpreadsheet_() {
          SpreadsheetApp.create('Praper Contest League — Data');
 }
 
-function getSheet_() {
+function getSheet_(allowCreate) {
   var ss = getSpreadsheet_();
   var sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
+  var exactRows = sheet ? sheet.getLastRow() : -1;
+
+  if (sheet && exactRows > 1) return finishLedgerSheet_(sheet);   // healthy
+
+  /* Self-heal: find a data-bearing near-match ('PCL Data', 'pcl-data ',
+   * 'Copy of PCL-Data', …). 2026-10-26 incident — a renamed/shadowed
+   * ledger tab silently read as ZERO everywhere while the data sat safe
+   * in the original tab. Never again: adopt the data back by name. */
+  var best = null, bestRows = -1, others = [];
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    if (sh.getName() === SHEET_NAME) continue;
+    if (!isLedgerTabName_(sh.getName())) continue;
+    var rows = sh.getLastRow();
+    if (rows > bestRows) {
+      if (best) others.push('"' + best.getName() + '"');
+      best = sh; bestRows = rows;
+    } else {
+      others.push('"' + sh.getName() + '"');
+    }
+  }
+
+  if (sheet && bestRows <= exactRows) return finishLedgerSheet_(sheet);
+
+  if (best && bestRows > 1) {                     // adopt the real ledger
+    var from = best.getName();
+    if (sheet) {                                  // empty shadow in the way
+      var parked = 'PCL-Data-empty-' +
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(),
+                             'yyyyMMdd-HHmmss');
+      sheet.setName(parked);
+      others.push('"' + parked + '" (the empty tab that shadowed the data)');
+    }
+    best.setName(SHEET_NAME);
+    logAdmin_('system', 'LEDGER-TAB-ADOPTED', SHEET_NAME + ' \u2190 ' + from,
+              'Ledger tab was not reachable under its real name (renamed or '
+            + 'copied over?). Re-adopted "' + from + '" with ' + bestRows
+            + ' rows. Other candidates: ' + (others.join(', ') || 'none')
+            + '. Nothing was lost.');
+    return finishLedgerSheet_(best);
+  }
+
+  if (sheet) return finishLedgerSheet_(sheet);    // header-only, no better match
+
+  if (allowCreate) {                              // first-ever bootstrap (ingest)
     sheet = ss.insertSheet(SHEET_NAME);
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
+    logAdmin_('system', 'LEDGER-CREATED', SHEET_NAME,
+              'Fresh ledger bootstrapped by the ingest path.');
     return sheet;
   }
-  // migration: sheets created before a HEADERS change get the new tail columns
+
+  throw new Error('LEDGER TAB MISSING: no readable "' + SHEET_NAME
+    + '" tab in the ledger spreadsheet. Rename the data tab back to "'
+    + SHEET_NAME + '" (or restore the sheet) \u2014 reads refuse to invent '
+    + 'an empty ledger.');
+}
+
+/** Header-integrity migration shared by every resolve path (old sheets get
+ *  new tail columns when HEADERS grows). */
+function finishLedgerSheet_(sheet) {
   if (sheet.getLastColumn() < HEADERS.length) {
     sheet.getRange(1, sheet.getLastColumn() + 1, 1,
                    HEADERS.length - sheet.getLastColumn())
          .setValues([HEADERS.slice(sheet.getLastColumn())]);
   }
   return sheet;
+}
+
+/** 'PCL-Data' family detector: case/spacing/punctuation-insensitive and
+ *  tolerant of Google's 'Copy of ' prefix. Deliberately NEVER matches
+ *  backup tabs (PCL-Data-Backup-…) or unrelated names. */
+function isLedgerTabName_(name) {
+  var n = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (n.indexOf('copyof') === 0) n = n.slice(6);
+  return n === 'pcldata';
 }
 
 /** ---------- ANSWER → DRIVE ---------- */

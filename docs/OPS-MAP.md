@@ -154,6 +154,7 @@ AUDIT-tab repair once — it rewrites the whole ledger to canonical ids.
 | Public site old, internal fine (or vice versa) | The two repos diverged — sync per 4a/4c |
 | Sign-in / identity weirdness | The Work email field is the identity now; legacy Google sign-in engine is dormant in app.js (restore the #gpanel HTML to re-enable) |
 | Data scare | `PCL-Data-Backup-YYYYMMDD` tabs (14 kept, daily trigger) — never edit those |
+| Board/admin/director all empty but the Sheet has data | The `PCL-Data` tab was renamed or shadowed by an empty copy — rename the data tab back to exactly `PCL-Data`. Since the 2026-10-26 fix, `getSheet_()` self-heals: it re-adopts a data-bearing near-name tab (`PCL Data`, `Copy of PCL-Data`, …), logs `LEDGER-TAB-ADOPTED` in AdminLog, and on truly-missing tabs reads fail LOUDLY instead of showing fake zeros |
 | Two players "share" a post they didn't both submit | Crossed Media ID — run AUDIT → REPAIR MEDIA IDS once; the ingest can't produce those ids anymore |
 | Director's room says nothing to review | Default tab = CURRENT week's challenge entries only — use the week strip; ALL CONTENTS always plays the whole season |
 | Players can't submit a challenge entry | Check REPORTS → Submissions panel (a week/season switch may be CLOSED) and the `PCL-Settings` tab in the Sheet |
