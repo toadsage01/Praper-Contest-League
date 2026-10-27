@@ -271,11 +271,11 @@
       $("dirLiveTag").textContent = "SEASON";
       return;
     }
-    var w = currentWeek();
+    var w = state.week || currentWeek();
     var ch = CHALLENGES[w - 1] || { name: "" };
     $("dirWeekTag").textContent = "WEEK " + w;
     $("dirWeekName").textContent = ch.name.toUpperCase();
-    $("dirLiveTag").textContent = "LIVE";
+    $("dirLiveTag").textContent = w === currentWeek() ? "LIVE" : "ARCHIVE";
   }
   function initials(name) {
     var parts = String(name || "?").trim().split(/\s+/);
@@ -380,7 +380,8 @@
     stage.className = "dir-stage";
     $("dirMediaSwitch").hidden = true;
     var msg = state.mode === "challenge"
-      ? "No weekly-challenge entries for Week " + currentWeek() + " yet."
+      ? "No weekly-challenge entries for Week " + (state.week || currentWeek()) +
+        " yet — use the week strip above to screen another week."
       : "No submissions this season yet.";
     var alt = state.mode === "challenge" && state.feed.all.length
       ? '<button type="button" class="dir-act" id="dirSeeAll">SEE ALL CONTENTS &#8599;</button>'
@@ -418,10 +419,15 @@
     renderEntry();
   }
 
-  /* ---------- feed load ---------- */
-  function loadFeed(code) {
+  /* ---------- feed load ----------
+     ROUND 35 — the room browses ANY week (?week=N, default = the live
+     week); the weekCounts block feeds the week strip so the Director can
+     see at a glance which weeks hold challenge entries. */
+  function loadFeed(code, week) {
     showGateErr("Checking…");
-    return jsonp({ action: "directorFeed", code: code })
+    var params = { action: "directorFeed", code: code };
+    if (week >= 1 && week <= WEEK_TOTAL) params.week = week;
+    return jsonp(params)
       .then(function (res) {
         if (!res || !res.ok) {
           try { localStorage.removeItem(CODE_KEY); } catch (e) { /* ok */ }
@@ -431,6 +437,9 @@
         }
         state.code = code;
         state.week = Number(res.week) || currentWeek();
+        state.liveWeek = Number(res.liveWeek) || currentWeek();
+        state.weekCounts = (res.weekCounts && typeof res.weekCounts === "object")
+          ? res.weekCounts : { challenge: {}, all: {} };
         state.feed = {
           challenge: Array.isArray(res.entries) ? res.entries : [],
           all: Array.isArray(res.regular) ? res.regular : []
@@ -446,9 +455,11 @@
             ? res.noteWeeks : {},
           season: String(res.noteSeason || "")
         };
+        renderWeeks();
         if (!state.feed.challenge.length && !state.feed.all.length) {
           showEmpty("No submissions for Week " + res.week +
-            " yet. The room fills up as entries land.");
+            " yet — pick another week from the strip, or the ALL CONTENTS " +
+            "tab plays every submission of the season.");
           return;
         }
         renderBanner();
@@ -461,6 +472,28 @@
           ? "The league server took too long to answer — try again."
           : "Could not reach the league server — check the connection.");
       });
+  }
+
+  /* ---------- week strip ----------
+     W1..W10 chips, each with that week's CHALLENGE-entry count (the
+     weekly tab's content). Clicking re-pulls the feed for that week. */
+  function renderWeeks() {
+    var nav = $("dirWeeks");
+    if (!nav) return;
+    nav.hidden = false;
+    var counts = (state.weekCounts && state.weekCounts.challenge) || {};
+    var html = "";
+    for (var w = 1; w <= WEEK_TOTAL; w++) {
+      if (w > (state.liveWeek || currentWeek())) break;   // future weeks don't exist yet
+      var n = Number(counts[String(w)]) || 0;
+      html += '<button type="button" class="dir-wchip' +
+        (w === state.week ? " is-on" : "") +
+        (!n ? " is-empty" : "") + '" data-week="' + w + '"' +
+        ' title="Week ' + w + ' — ' +
+        esc((CHALLENGES[w - 1] || {}).name || "") + '">W' + w +
+        '<span class="dir-wchip-n">' + n + "</span></button>";
+    }
+    nav.innerHTML = html;
   }
 
   /* ---------- gate wiring ---------- */
@@ -498,6 +531,26 @@
   });
   $("dirTabWk").addEventListener("click", function () { setMode("challenge"); });
   $("dirTabAll").addEventListener("click", function () { setMode("all"); });
+  /* week strip — screen another week (re-pulls that week's feed) */
+  $("dirWeeks").addEventListener("click", function (ev) {
+    var b = ev.target.closest("[data-week]");
+    if (!b || !state.code) return;
+    var w = Number(b.getAttribute("data-week"));
+    if (!w || w === state.week) return;
+    state.week = w;
+    renderWeeks();
+    var list = listFor(state.mode);
+    if (state.mode === "challenge" && list.length) {
+      // optimistic clear — the fresh feed re-renders when it lands
+      state.idx = 0;
+      renderEntry();
+    }
+    loadFeed(state.code, w).then(function () {
+      if (theatre.hidden) return;          // empty week → showEmpty already
+      state.idx = 0;
+      renderEntry();
+    });
+  });
   $("dirSwPost").addEventListener("click", function () {
     if (state.mediaMode !== "post") { state.mediaMode = "post"; renderStage(); }
   });

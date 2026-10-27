@@ -279,6 +279,8 @@ function doPostLocked_(e) {
     if (payload && payload.action === 'adminLogin') return adminLogin_(payload);
     if (payload && payload.action === 'syncNow') return syncNow_(payload);
     if (payload && payload.action === 'awardChallenge') return awardChallenge_(payload);
+    if (payload && payload.action === 'setGate') return setGate_(payload);
+    if (payload && payload.action === 'repairMediaIds') return repairMediaIds_(payload);
 
     var id = payload.submissionId || Utilities.getUuid();
     var d = payload.data || {};
@@ -326,7 +328,26 @@ function doPostLocked_(e) {
       }
     }
 
-    var sheet = getSheet_();
+    // ---- SUBMISSION GATES (Control Room switches, ROUND 35) — the admin
+    // power to hold submissions: whole season, or any single week's
+    // challenge entries. Absent settings = everything open.
+    var gates = readSubmitGates_();
+    if (!gates.seasonOpen) {
+      return json_({ ok: false, error:
+        'Submissions are paused by the league admins right now — they will '
+        + 'reopen the gates soon. Your draft is saved in the form.' });
+    }
+    if (week) {
+      var gateWk = wkNumOfLabel_(week);
+      if (gateWk && !gates.weeks[String(gateWk)]) {
+        return json_({ ok: false, error:
+          'Week ' + gateWk + ' challenge entries are CLOSED by the league '
+          + 'admins. Switch the challenge to \u201cNot entering\u201d to send '
+          + 'regular posts, or wait for the reopen.' });
+      }
+    }
+
+    var sheet = getSheet_(true);   // ingest may bootstrap a brand-new ledger
 
     // One read pass over the ledger → everything the checks need:
     // media/URL ownership, snapshot counters and the retried-submission guard
@@ -589,6 +610,7 @@ function statsEndpoint_(p) {
     awards: (s.awards || []).map(function (a) {
       return { week: a.week, player: a.name, points: a.points, note: a.note };
     }),
+    gates: s.gates,            // the form reads the submission switches here
     generatedAt: new Date().toISOString()
   });
 }
@@ -611,7 +633,8 @@ function ledgerEndpoint_(p) {
     },
     players: s.players,
     rows: s.rows,
-    log: recentLog_(150)
+    log: recentLog_(150),
+    gates: s.gates            // submission switches → the SUBMISSIONS panel
   });
 }
 
@@ -938,7 +961,9 @@ function collect_() {
         collabWith: c['Collab With'] !== undefined ? str_(r[c['Collab With']]) : '',
         collabStatus: c['Collab Status'] !== undefined
           ? str_(r[c['Collab Status']]) : '',
-        ctype: c['Content Type'] !== undefined ? str_(r[c['Content Type']]) : ''
+        ctype: c['Content Type'] !== undefined ? str_(r[c['Content Type']]) : '',
+        email: c['Player Email'] !== undefined
+          ? str_(r[c['Player Email']]) : ''
       });
     });
     var v = values[values.length - 1][0];
@@ -1040,8 +1065,15 @@ function collect_() {
       if (proj !== '') d.proj += proj;
       var ver = numOrBlank_(row.verifiedPoints);
       if (ver !== '') d.ver += ver;
-      var w = weekOfMs_(new Date(firstByMedia[k].ts).getTime());
-      var bucket = wk[w] || (wk[w] = {});
+      // ROUND 35 — the weekly tabs mean WEEKLY-CHALLENGE uploads only.
+      // The bucket key comes from the row's own challenge tag ("Week N —
+      // name"); regular (untagged) posts score the season totals but never
+      // appear in a W tab. Tag weeks and calendar weeks agree — the form
+      // only lets the live week be selected — and a tag beats the clock:
+      // the challenge a post was FOR is the truth, not when it landed.
+      var tagged = wkNumOfLabel_(row.week);
+      if (!tagged) return;                    // regular post — season only
+      var bucket = wk[tagged] || (wk[tagged] = {});
       var wp = bucket[row.name] ||
         (bucket[row.name] = { player: row.name,
                               designation: desigLookup[row.name] || '',
@@ -1129,18 +1161,28 @@ function collect_() {
       total: LEAGUE_WEEKS,
       current: currentWeek_(),
       byWeek: byWeek
-    }
+    },
+    gates: publicGates_()      // season + per-week submission switches
   };
 }
 
 /** ---------- MEDIA ID (the dedup key) + LINK OWNERSHIP ---------- */
 
 // One stable ID per physical post, pulled from its canonical URL:
-//   IG reel/post/IGTV → shortcode      YT → video ID      LI → activity ID
+//   IG reel/post/IGTV → shortcode      YT → video ID      LI → activity number
 // Mirrors the form's classifyUrl: instagram.com + instagr.am, youtube.com
 // (+ m./music./nocookie) + youtu.be, linkedin.com + lnkd.in (LinkedIn's own
 // shortener). Unknown shapes return '' → the normalized URL becomes the
 // ownership key instead (safe default).
+//
+// ROUND 35 — LinkedIn canonicalisation. The ledger had degenerate Media IDs
+// ("li", "li_p"…) that collided ACROSS PLAYERS and tripped the dedup. Two
+// causes: (1) the posts/<slug> capture grabbed the whole "name_text-activity-
+// <id>-hash" slug instead of the activity NUMBER inside it; (2) a truncated
+// or partial link fell through to a 1-char tail. The extractor now runs in
+// strict priority order — the urn / activity number always beats the slug —
+// and the degeneracy guard refuses any li_ tail shorter than 5 characters
+// (those fall back to the URL key, which stays unique per link).
 function mediaId_(url, fmt) {
   url = String(url || '');
   var m;
@@ -1155,14 +1197,235 @@ function mediaId_(url, fmt) {
         url.match(/youtube(?:-nocookie)?\.com\/(?:live|embed|v)\/([\w-]+)/i);
     if (m) return 'yt_' + m[1];
   } else if (fmt === 'li_post') {
-    m = url.match(/linkedin\.com\/posts\/([^\/?#]+)/i) ||
-        url.match(/activity[-:]?(\d{10,})/i) ||
-        url.match(/linkedin\.com\/pulse\/([^\/?#]+)/i) ||
-        url.match(/lnkd\.in\/([\w-]+)/i) ||
-        url.match(/urn:li:(?:activity|ugcPost|share):(\w+)/i);
+    // 1. the urn form — feed/update/urn:li:activity|ugcPost|share:<digits>
+    m = url.match(/urn:li:(?:activity|ugcPost|share):(\d{8,})/i);
     if (m) return 'li_' + m[1];
+    // 2. the activity number anywhere in the link (posts, feed, permalinks)
+    m = url.match(/activity[-:](\d{10,})/i);
+    if (m) return 'li_' + m[1];
+    // 3. the posts/<slug> form — re-scan the slug itself for the number
+    //    first (…/posts/name_text-activity-7234…-aB1), the name alone second
+    m = url.match(/linkedin\.com\/posts\/([^\/?#]+)/i);
+    if (m) {
+      var slug = m[1];
+      var inner = slug.match(/-activity-(\d{10,})/i) || slug.match(/(\d{10,})/);
+      if (inner) return 'li_' + inner[1];
+      if (slug.length >= 5) return 'li_' + slug;   // named slug, long enough
+      return '';                                   // "p"-style junk → URL key
+    }
+    // 4. Pulse articles keep their slug (unique per article)
+    m = url.match(/linkedin\.com\/pulse\/([^\/?#]+)/i);
+    if (m && m[1].length >= 5) return 'li_' + m[1];
+    // 5. lnkd.in opaque tokens — unique per share
+    m = url.match(/lnkd\.in\/([\w-]+)/i);
+    if (m && m[1].length >= 5) return 'li_' + m[1];
+    return '';
   }
   return '';
+}
+
+/** A stored Media ID no extractor should ever produce again ("li", "li_p",
+ *  "li_urn:…" residue). These are the cross-player COLLISION ids — the
+ *  repair pass rewrites them and ingest prefers the URL key over them. */
+function degenerateMediaId_(mid) {
+  var s = String(mid || '');
+  if (!s) return false;
+  if (s.indexOf('li_') === 0) {
+    var tail = s.slice(3);
+    if (!tail || tail.length < 5) return true;          // li, li_p, li_ab
+    if (/^urn:/i.test(tail)) return true;               // li_urn:li:ugcPost:…
+    if (/[-_]activity[-:]/i.test(tail) && !/^\d{10,}$/.test(tail)) return true;
+  }
+  return false;
+}
+
+/** ---------- MEDIA ID REPAIR (one click, ROUND 35) ----------
+ *  Rewrites every ledger Media ID to today's canonical extraction. Fixes
+ *  the LinkedIn duplication era: degenerate ids ("li", "li_p"), full-slug
+ *  ids ("li_name_text-activity-7234…-aB1") and empty cells all become the
+ *  canonical "li_<activity-number>" — so the same physical post ALWAYS
+ *  carries one key, whichever shape of link was pasted. Rows whose stored
+ *  id already matches the canonical extraction are left untouched; IG/YT
+ *  ids recompute to themselves by construction. Old snapshots keep their
+ *  rows (history), the OCR count lives in the ledger cell anyway. */
+function repairRun_() {
+  var sheet = getSheet_();
+  var lastRow = sheet.getLastRow();
+  var out = { scanned: 0, rewritten: 0, cleared: 0, mergedKeys: 0 };
+  if (lastRow < 2) return out;
+  var idCol = HEADERS.indexOf('Media ID') + 1;
+  var fmtCol = HEADERS.indexOf('Format') + 1;
+  var urlCol = HEADERS.indexOf('Post URL') + 1;
+  var rng = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
+  var vals = rng.getValues();
+  var mapTo = {};                        // old id → new id (merge detector)
+  var writes = [];                       // [rowIndex, newValue]
+  for (var i = 0; i < vals.length; i++) {
+    var stored = str_(vals[i][idCol - 1]).trim();
+    var fmt = str_(vals[i][fmtCol - 1]).trim();
+    var url = str_(vals[i][urlCol - 1]).trim();
+    if (!fmt || !url) continue;
+    out.scanned++;
+    var computed = mediaId_(url, fmt);
+    var next = stored;
+    if (!stored) {
+      if (computed) next = computed;                 // fill the empty cell
+    } else if (degenerateMediaId_(stored)) {
+      next = computed;                               // junk → canonical (or '')
+    } else if (computed && computed !== stored) {
+      next = computed;                               // legacy slug → canonical
+    }
+    if (next !== stored) {
+      writes.push([i + 2, next]);
+      if (next) mapTo[stored] = next;   // merge detector input
+      if (!next) out.cleared++;
+    }
+  }
+  // merge detector: distinct OLD ids now sharing one NEW canonical key
+  var byNew = {};
+  Object.keys(mapTo).forEach(function (old) {
+    var nw = mapTo[old];
+    byNew[nw] = (byNew[nw] || 0) + 1;
+  });
+  Object.keys(byNew).forEach(function (nw) {
+    if (byNew[nw] > 1) out.mergedKeys++;
+  });
+  writes.forEach(function (w) {
+    sheet.getRange(w[0], idCol).setValue(w[1]);
+  });
+  out.rewritten = writes.length;
+  return out;
+}
+
+/** Admin POST action — {action:'repairMediaIds', adminKey} → run + log. */
+function repairMediaIds_(payload) {
+  var err = checkAdmin_(payload.adminKey);
+  if (err) return json_({ ok: false, error: err });
+  var out = repairRun_();
+  logAdmin_(operatorOf_(payload) || 'console', 'REPAIR', 'media ids',
+    out.rewritten + '/' + out.scanned + ' rows rewritten' +
+    (out.cleared ? ' · ' + out.cleared + ' cleared to URL-key' : '') +
+    (out.mergedKeys ? ' · ' + out.mergedKeys + ' key merges' : ''));
+  return json_({ ok: true, result: out });
+}
+
+/** Editor-runnable twin — run repairLedgerMediaIds() from the Apps Script
+ *  editor once if you prefer not to use the console button. */
+function repairLedgerMediaIds() {
+  var out = repairRun_();
+  logAdmin_('editor', 'REPAIR', 'media ids',
+    out.rewritten + '/' + out.scanned + ' rows rewritten' +
+    (out.mergedKeys ? ' · ' + out.mergedKeys + ' key merges' : ''));
+  return out.rewritten + ' of ' + out.scanned + ' rows rewritten' +
+    (out.cleared ? ' (' + out.cleared + ' cleared to URL-key)' : '') +
+    (out.mergedKeys ? ' · ' + out.mergedKeys + ' duplicate keys merged' : '');
+}
+
+/** "Week 2 — Best Storytelling Debut" → 2 · anything else → 0.
+ *  Shared by the director feed, the roll-up's challenge-only weekly buckets
+ *  and the ingest gates — one parser, one behaviour everywhere. */
+function wkNumOfLabel_(label) {
+  var m = String(label || '').match(/^Week\s+(\d+)\b/i);
+  return m ? Number(m[1]) : 0;
+}
+
+/** ---------- SUBMISSION GATES (Control Room power, ROUND 35) ----------
+ *  The admins can close the whole season or any single week's challenge
+ *  entries without touching code. Settings live in a tiny PCL-Settings tab
+ *  (Key/Value) so they stay visible and editable by hand; absent rows mean
+ *  OPEN — the season clock stays the only gate by default.
+ *    gate.seasonOpen  = '0'  → EVERY submission refused
+ *    gate.week.<n>    = '0'  → challenge-tagged posts for week n refused
+ *  Regular ("Not entering") posts only answer to the season switch. */
+var GATES_SHEET = 'PCL-Settings';
+
+function getGatesSheet_() {
+  var ss = getSpreadsheet_();
+  var sh = ss.getSheetByName(GATES_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(GATES_SHEET);
+    sh.appendRow(['Key', 'Value', 'Updated', 'Updated By']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** Read pass → { seasonOpen: bool, weeks: {1..10: bool}, raw: {...} }.
+ *  Any missing/blank key = open. Anything non-'0' also reads open, so a
+ *  typo can never lock the league out by accident. */
+function readSubmitGates_() {
+  var out = { seasonOpen: true, weeks: {}, raw: {} };
+  for (var w = 1; w <= LEAGUE_WEEKS; w++) out.weeks[String(w)] = true;
+  try {
+    var sh = getGatesSheet_();
+    var last = sh.getLastRow();
+    if (last < 2) return out;
+    var vals = sh.getRange(2, 1, last - 1, 2).getValues();
+    vals.forEach(function (r) {
+      var k = str_(r[0]).trim();
+      var v = str_(r[1]).trim();
+      if (!k) return;
+      out.raw[k] = v;
+      if (k === 'gate.seasonOpen') out.seasonOpen = v !== '0';
+      var mw = k.match(/^gate\.week\.(\d+)$/);
+      if (mw) {
+        var n = Number(mw[1]);
+        if (n >= 1 && n <= LEAGUE_WEEKS) out.weeks[String(n)] = v !== '0';
+      }
+    });
+  } catch (ignore) { /* settings tab absent → everything open */ }
+  return out;
+}
+
+/** Write one gate key ('0' = closed, '1' = open) with an audit trail. */
+function writeGate_(key, open, operator) {
+  var sh = getGatesSheet_();
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues() : [];
+  var row = 0;
+  for (var i = 0; i < vals.length; i++) {
+    if (str_(vals[i][0]).trim() === key) { row = i + 2; break; }
+  }
+  if (row) {
+    sh.getRange(row, 2, 1, 3).setValues([[open ? '1' : '0', new Date(),
+                                          operator || 'console']]);
+  } else {
+    sh.appendRow([key, open ? '1' : '0', new Date(), operator || 'console']);
+  }
+}
+
+/** Admin POST action — {action:'setGate', adminKey, scope:'season'|'week',
+ *  week:<n>, open:<bool>} → writes the settings row + AdminLog. */
+function setGate_(payload) {
+  var err = checkAdmin_(payload.adminKey);
+  if (err) return json_({ ok: false, error: err });
+  var scope = String(payload.scope || '').toLowerCase();
+  var operator = operatorOf_(payload) || 'console';
+  if (scope === 'season') {
+    writeGate_('gate.seasonOpen', !!payload.open, operator);
+    logAdmin_(operator, 'GATE', 'season',
+              payload.open ? 'SEASON SUBMISSIONS OPEN' : 'SEASON SUBMISSIONS CLOSED');
+    return json_({ ok: true, scope: 'season', open: !!payload.open });
+  }
+  if (scope === 'week') {
+    var n = Number(payload.week);
+    if (!(n >= 1 && n <= LEAGUE_WEEKS)) {
+      return json_({ ok: false, error: 'Week must be 1-' + LEAGUE_WEEKS });
+    }
+    writeGate_('gate.week.' + n, !!payload.open, operator);
+    logAdmin_(operator, 'GATE', 'week ' + n,
+              payload.open ? 'WEEK ' + n + ' ENTRIES OPEN' :
+                             'WEEK ' + n + ' ENTRIES CLOSED');
+    return json_({ ok: true, scope: 'week', week: n, open: !!payload.open });
+  }
+  return json_({ ok: false, error: 'Unknown gate scope.' });
+}
+
+/** The public shape that rides the stats/collect responses — booleans only,
+ *  no settings internals. */
+function publicGates_() {
+  var g = readSubmitGates_();
+  return { seasonOpen: g.seasonOpen, weeks: g.weeks };
 }
 
 /** Comparison form of a player's name — whitespace/case tolerant so
@@ -1243,12 +1506,12 @@ function ledgerIndex_(sheet) {
  *  single source of truth: rotate a password here, deploy a new version,
  *  done. (Never move this list client-side.) */
 var ADMINS = [
-  { pass: 'pratham@123',   name: 'Pratham Jindal' },
-  { pass: 'sejal@123',     name: 'Sejal Choudhary' },
-  { pass: 'kanupriya@123', name: 'Kanupriya Srikoti' },
-  { pass: 'vikram@123',    name: 'Vikram Singh Mawari' },
-  { pass: 'lagan@123',     name: 'Lagan Garg' },
-  { pass: 'manas@123',     name: 'Manas Ranjan' }
+  { pass: '8q41my67tks9',  name: 'Pratham Jindal' },
+  { pass: 'lfi9g1y67fo9',  name: 'Lagan Garg' },
+  { pass: '40jnj8o83bd7',  name: 'Vikram Singh Mawari' },
+  { pass: '7mvs8l9xs0qd',  name: 'Sejal Choudhary' },
+  { pass: '55adv8mo00f9',  name: 'Kanupriya Srikoti' },
+  { pass: 'x898xes4shct',  name: 'Manas Ranjan' }
 ];
 
 /** Look an admin up by password; null when the password matches nobody. */
@@ -1444,8 +1707,16 @@ function directorFeed_(p) {
   }
   var sheet = getSheet_();
   var lastRow = sheet.getLastRow();
-  var out = { ok: true, week: currentWeek_(), entries: [], regular: [],
+  // The room can browse ANY week — ?week=N — default = the live week.
+  // weekCounts tells the chips what each week holds so "nothing to review"
+  // never comes as a surprise again.
+  var liveWeek = currentWeek_();
+  var wantWeek = Number(p.week);
+  if (!(wantWeek >= 1 && wantWeek <= LEAGUE_WEEKS)) wantWeek = liveWeek || 1;
+  var out = { ok: true, week: wantWeek, liveWeek: liveWeek,
+              entries: [], regular: [],
               picks: [], noteWeeks: {}, noteSeason: '',
+              weekCounts: { challenge: {}, all: {} },
               generatedAt: new Date().toISOString() };
   try {
     var log = readDirectorLog_();
@@ -1457,21 +1728,17 @@ function directorFeed_(p) {
   var vals = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
   var c = {};
   HEADERS.forEach(function (h, i) { c[h] = i; });
-  var want = 'Week ' + out.week;   // stored as "Week N — Challenge Name"
-  function wkNumOf_(label) {
-    var m = String(label || '').match(/^Week\s+(\d+)/i);
-    return m ? Number(m[1]) : 0;
-  }
+  var want = 'Week ' + wantWeek;   // stored as "Week N — Challenge Name"
   function numCell_(v) {
     if (v === '' || v === null || v === undefined) return '';
     var n = Number(String(v).replace(/[,\s]/g, ''));
     return isNaN(n) ? '' : n;
   }
   var allByMedia = {};             // every post of the season
-  var challengeKeys = {};          // keys that belong to THIS week's challenge
+  var challengeKeys = {};          // keys that belong to the BROWSED week's challenge
   for (var i = vals.length - 1; i >= 0; i--) {          // newest first
     var wk = str_(vals[i][c['Weekly Challenge']]);
-    var isChallenge = String(wk).indexOf('Week ') === 0;
+    var isChallenge = wkNumOfLabel_(wk) > 0;
     var url = str_(vals[i][c['Post URL']]);
     var key = str_(vals[i][c['Media ID']]) || url;
     if (!key) continue;
@@ -1487,13 +1754,17 @@ function directorFeed_(p) {
         format: str_(vals[i][c['Format']]),
         url: url,
         challenge: wk,
-        weekNum: wkNumOf_(wk),
+        weekNum: wkNumOfLabel_(wk),
         isChallenge: isChallenge,
         challengeUrl: str_(vals[i][c['Challenge URL']]),
         submittedAt: vals[i][c['Timestamp']] instanceof Date
           ? vals[i][c['Timestamp']].toISOString() : str_(vals[i][c['Timestamp']]),
         screenshot: str_(vals[i][c['Screenshot Link']])
       };
+      // count DISTINCT media once per week bucket (the room dedups by media)
+      var wkn = wkNumOfLabel_(wk);
+      if (wkn) out.weekCounts.challenge[wkn] = (out.weekCounts.challenge[wkn] || 0) + 1;
+      out.weekCounts.all[wkn || 'regular'] = (out.weekCounts.all[wkn || 'regular'] || 0) + 1;
     }
     if (isChallenge && wk.indexOf(want) === 0) challengeKeys[key] = true;
     // collab-partner merge + per-person newest-wins photo/views
@@ -1956,28 +2227,38 @@ function syncNow_(payload) {
   return json_({ ok: true, yt: yt, ig: ig, li: li });
 }
 
-/** Twice-daily tracker — 09:00 & 21:00 IST-ish (script timezone governs;
- *  set the project timezone to Kolkata in the editor's settings). */
+/** HOURLY tracker (ROUND 35 — was twice-daily 09:00 & 21:00). The league
+ *  wants the board fresh: YouTube counts lift every hour, and every page
+ *  open re-reads the ledger live. The function NAME stays metricsDaily_
+ *  so pre-round triggers upgrade cleanly (the ensure pass deletes them). */
 function metricsDaily_() {
   var yt = syncYouTube_();
   if (yt.note) logAdmin_('system', 'SYNC', 'metrics',
     'scheduled · YT ' + yt.updated + '/' + yt.checked + ' (' + yt.note + ')');
-  try { ensureBackupTrigger_(); dailyLedgerBackup_(); } catch (ignore) { /* best effort */ }
+  try { ensureBackupTrigger_(); dailyLedgerBackup_(); }
+  catch (ignore) { /* best effort — backup stays once-per-day by design */ }
 }
 function ensureMetricsTriggers_() {
   var want = 'metricsDaily_';
   var existing = ScriptApp.getProjectTriggers().filter(function (t) {
     return t.getHandlerFunction() === want;
   });
-  if (existing.length >= 2) return;
-  existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger(want).timeBased().everyDays(1).atHour(9).create();
-  ScriptApp.newTrigger(want).timeBased().everyDays(1).atHour(21).create();
+  // upgrade path: drop ANY count of the old trigger, install exactly one
+  // hourly — never two, never the stale twice-daily pair
+  if (existing.length !== 1) {
+    existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    ScriptApp.newTrigger(want).timeBased().everyHours(1).create();
+  }
 }
-/** Run ONCE from the editor if triggers should exist before the first SYNC NOW. */
+/** Run ONCE from the editor if the hourly trigger should exist before the
+ *  first SYNC NOW (the console button also self-heals it). */
 function setupMetricsTriggers() {
   ensureMetricsTriggers_();
-  return 'Daily tracking triggers installed (09:00 & 21:00).';
+  var t = ScriptApp.getProjectTriggers().filter(function (x) {
+    return x.getHandlerFunction() === 'metricsDaily_';
+  })[0];
+  return 'Hourly tracking trigger installed' +
+    (t ? ' (' + String(t.getEventType()) + ', every 1 hour).' : '.');
 }
 
 /** ---------- DAILY LEDGER BACKUP (10-week insurance) ----------
@@ -2418,22 +2699,87 @@ function getSpreadsheet_() {
          SpreadsheetApp.create('Praper Contest League — Data');
 }
 
-function getSheet_() {
+function getSheet_(allowCreate) {
   var ss = getSpreadsheet_();
   var sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
+  var exactRows = sheet ? sheet.getLastRow() : -1;
+
+  if (sheet && exactRows > 1) return finishLedgerSheet_(sheet);   // healthy
+
+  /* Self-heal: find a data-bearing near-match ('PCL Data', 'pcl-data ',
+   * 'Copy of PCL-Data', …). 2026-10-26 incident — a renamed/shadowed
+   * ledger tab silently read as ZERO everywhere while the data sat safe
+   * in the original tab. Never again: adopt the data back by name. */
+  var best = null, bestRows = -1, others = [];
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    if (sh.getName() === SHEET_NAME) continue;
+    if (!isLedgerTabName_(sh.getName())) continue;
+    var rows = sh.getLastRow();
+    if (rows > bestRows) {
+      if (best) others.push('"' + best.getName() + '"');
+      best = sh; bestRows = rows;
+    } else {
+      others.push('"' + sh.getName() + '"');
+    }
+  }
+
+  if (sheet && bestRows <= exactRows) return finishLedgerSheet_(sheet);
+
+  if (best && bestRows > 1) {                     // adopt the real ledger
+    var from = best.getName();
+    if (sheet) {                                  // empty shadow in the way
+      var parked = 'PCL-Data-empty-' +
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(),
+                             'yyyyMMdd-HHmmss');
+      sheet.setName(parked);
+      others.push('"' + parked + '" (the empty tab that shadowed the data)');
+    }
+    best.setName(SHEET_NAME);
+    logAdmin_('system', 'LEDGER-TAB-ADOPTED', SHEET_NAME + ' \u2190 ' + from,
+              'Ledger tab was not reachable under its real name (renamed or '
+            + 'copied over?). Re-adopted "' + from + '" with ' + bestRows
+            + ' rows. Other candidates: ' + (others.join(', ') || 'none')
+            + '. Nothing was lost.');
+    return finishLedgerSheet_(best);
+  }
+
+  if (sheet) return finishLedgerSheet_(sheet);    // header-only, no better match
+
+  if (allowCreate) {                              // first-ever bootstrap (ingest)
     sheet = ss.insertSheet(SHEET_NAME);
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
+    logAdmin_('system', 'LEDGER-CREATED', SHEET_NAME,
+              'Fresh ledger bootstrapped by the ingest path.');
     return sheet;
   }
-  // migration: sheets created before a HEADERS change get the new tail columns
+
+  throw new Error('LEDGER TAB MISSING: no readable "' + SHEET_NAME
+    + '" tab in the ledger spreadsheet. Rename the data tab back to "'
+    + SHEET_NAME + '" (or restore the sheet) \u2014 reads refuse to invent '
+    + 'an empty ledger.');
+}
+
+/** Header-integrity migration shared by every resolve path (old sheets get
+ *  new tail columns when HEADERS grows). */
+function finishLedgerSheet_(sheet) {
   if (sheet.getLastColumn() < HEADERS.length) {
     sheet.getRange(1, sheet.getLastColumn() + 1, 1,
                    HEADERS.length - sheet.getLastColumn())
          .setValues([HEADERS.slice(sheet.getLastColumn())]);
   }
   return sheet;
+}
+
+/** 'PCL-Data' family detector: case/spacing/punctuation-insensitive and
+ *  tolerant of Google's 'Copy of ' prefix. Deliberately NEVER matches
+ *  backup tabs (PCL-Data-Backup-…) or unrelated names. */
+function isLedgerTabName_(name) {
+  var n = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (n.indexOf('copyof') === 0) n = n.slice(6);
+  return n === 'pcldata';
 }
 
 /** ---------- ANSWER → DRIVE ---------- */

@@ -218,6 +218,19 @@
             reported twice yet — the timeline appears with the first
             update snapshot.</p>
         </div>
+        <div class="pcl-panel">
+          <h2 class="pcl-panel-title">Data Tools</h2>
+          <p class="pcl-hint">REPAIR MEDIA IDS rewrites every ledger Media ID
+            to the current canonical extraction — this fixes the LinkedIn
+            duplicate-id era (rows that shared ids like <b>li</b> or
+            <b>li_p</b> across different players). Rows already canonical
+            stay untouched; every rewrite lands in the Admin Log. Run it
+            once after this update ships, and again only if you ever see
+            crossed ids again.</p>
+          <button type="button" class="pcl-abtn pcl-abtn--accent" id="repairIdsBtn">
+            REPAIR MEDIA IDS</button>
+          <span id="repairIdsOut" class="pcl-hint" hidden></span>
+        </div>
       </section>
 
       <!-- ============ TAB 5 · ADMIN LOG ================================== -->
@@ -236,6 +249,20 @@
       <!-- ============ TAB 3 · REPORTS =================================== -->
       <section id="tabReports" class="pcl-tab" hidden>
         <div class="pcl-cards" id="seasonCards"></div>
+
+        <!-- ROUND 35 — SUBMISSION GATES: the admins' open/close power -->
+        <div class="pcl-panel">
+          <h2 class="pcl-panel-title">Submissions — Open / Close</h2>
+          <p class="pcl-hint">Your switches, enforced live by the backend:
+            close the whole season, or close any single week's challenge
+            entries. Closing a week only stops its CHALLENGE posts — regular
+            ("Not entering") uploads keep flowing unless the season switch
+            is off. Players see the closed state on the form instantly.</p>
+          <div class="pcl-gates" id="gatePanel">
+            <div class="pcl-gates-master" id="gateMaster"></div>
+            <div class="pcl-gates-weeks" id="gateWeeks"></div>
+          </div>
+        </div>
 
         <div class="pcl-panel">
           <h2 class="pcl-panel-title">Weekly Windows</h2>
@@ -385,7 +412,20 @@
     </div>
   </div>
 
-  <script src="js/gas-endpoint.js?v=20261027a"></script>
+  <!-- ============ PLAYER PROFILE MODAL (ROUND 35) ==================== -->
+  <!-- click a participant card → profile + contest stats + uploads -->
+  <div class="pcl-lightbox pcl-prof" id="profModal" hidden role="dialog"
+       aria-modal="true" aria-label="Player profile">
+    <div class="pcl-lb-back" data-act="close"></div>
+    <div class="pcl-prof-card">
+      <button type="button" class="pcl-lb-close" data-act="close" aria-label="Close profile">
+        <span class="pcl-px-x" aria-hidden="true"></span>
+      </button>
+      <div class="pcl-prof-body" id="profBody"></div>
+    </div>
+  </div>
+
+  <script src="js/gas-endpoint.js?v=20261027b"></script>
   <script src="js/admin.js"></script>
 </body>
 </html>

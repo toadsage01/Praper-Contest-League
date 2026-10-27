@@ -152,8 +152,21 @@
     4px 12px currentColor, 8px 12px currentColor;
 }
 
-/* ---- The board ---------------------------------------------------------------- */
-.pcl-tablewrap { min-height: 180px; }
+/* ---- The board ----------------------------------------------------------------
+   ROUND 35 — the standings are a SCROLLING SECTION: the week tabs + sync row
+   stay put, the ranked rows scroll inside a fixed-height panel, and the
+   column labels pin to the top of that panel while you scroll. */
+.pcl-tablewrap {
+  min-height: 180px;
+  max-height: min(64vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 6px 10px;
+  border: 3px solid var(--pcl-primary-deep);
+  background: var(--pcl-surface);
+  background: color-mix(in srgb, var(--pcl-surface) 55%, transparent);
+  box-shadow: 4px 4px 0 var(--pcl-hard);
+}
 
 .pcl-collabels, .pcl-row {
   display: grid;
@@ -162,12 +175,18 @@
 }
 
 .pcl-collabels {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   margin: 0 4px 8px;
+  padding: 10px 0 8px;
   font-family: var(--pcl-font-title);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--pcl-muted);
+  background: var(--pcl-surface);
+  border-bottom: 3px solid var(--pcl-primary-deep);
 }
 .pcl-collabels .pcl-col { padding: 0 14px; }
 .pcl-collabels .pcl-col--rank,

@@ -2652,3 +2652,16 @@ html[data-pcl-theme="dark"] .pcl-highnote { color: #ffd9a0; }
   line-height: 1.45;
   color: var(--pcl-muted);
 }
+
+/* ROUND 35 — the submission-gate note under the week select (form page):
+   only rendered when the Control Room closed the season or the live week */
+.pcl-gatenote {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 700;
+  color: var(--pcl-primary);
+  border: 2px dashed var(--pcl-primary);
+  background: var(--pcl-surface-2);
+  padding: 8px 10px;
+}

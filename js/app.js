@@ -276,9 +276,29 @@
           reason: "LinkedIn — that lnkd.in link looks truncated.",
           bad: whole };
       }
-      var am = tok.match(/activity[-:](\d{10,})/i);
-      return { ok: true, url: tok, format: "li_post",
-               mediaId: "li_" + (am ? am[1] : pm[1]) };
+      /* ROUND 35 — canonical LinkedIn id, the SAME priority the server's
+         mediaId_ uses (they must agree or the dedup splits in two):
+           1. urn:li:activity|ugcPost|share:<digits>   (feed/update links)
+           2. activity-<digits> anywhere               (permalinks)
+           3. the posts/<slug> → the activity number INSIDE the slug
+           4. pulse / lnkd.in slugs, but never a short junk tail ("li_p")
+         A too-short tail falls back to '' and the row keys on the URL —
+         unique per link, no more cross-player collisions. */
+      var liCanon = "";
+      var liUrn = tok.match(/urn:li:(?:activity|ugcPost|share):(\d{8,})/i);
+      var liAct = tok.match(/activity[-:](\d{10,})/i);
+      if (liUrn) liCanon = "li_" + liUrn[1];
+      else if (liAct) liCanon = "li_" + liAct[1];
+      else if (/\/(?:posts)\//i.test(path)) {
+        var inner = pm[1].match(/-activity-(\d{10,})/i) || pm[1].match(/(\d{10,})/);
+        if (inner) liCanon = "li_" + inner[1];
+        else if (pm[1].length >= 5) liCanon = "li_" + pm[1];
+      } else if (/\/pulse\//i.test(path) && pm[1].length >= 5) {
+        liCanon = "li_" + pm[1];
+      } else if (host === "lnkd.in" && pm[1].length >= 5) {
+        liCanon = "li_" + pm[1];
+      }
+      return { ok: true, url: tok, format: "li_post", mediaId: liCanon };
     }
 
     /* wrong domain: first guess the typo (youtube.cm → youtube.com), then
@@ -540,7 +560,8 @@
       posts.push({
         id: c.mediaId, url: c.url, format: c.format, mediaId: c.mediaId,
         views: "", shot: null, errViews: false, errShotMsg: "",
-        collab: false, collabWith: "", errCollab: false, errCollabMsg: "",
+        collab: false, collabOpen: true, collabWith: "", errCollab: false,
+        errCollabMsg: "",
         takenBy: "", collabFor: "", collabForEmail: "", mine: false,
         ctype: "PRAPER",
         ocrN: 0, ocrSolid: false, ocrAll: [], ocrStatus: "",
@@ -1478,8 +1499,8 @@
       GROUP_SVG +
       (p.collab ? '<span class="pcl-collab-half" aria-hidden="true">FULL</span>' : "") +
       "</button>" +
-      (p.collab
-        ? '<div class="pcl-collabpop">' +
+      (p.collab && p.collabOpen !== false
+        ? '<div class="pcl-collabpop" data-id="' + esc(p.id) + '">' +
           '<span class="pcl-collab-title">Collab · full points for each of you' +
           (p.collabWith.trim()
             ? '<span class="pcl-collab-set">\u2713 SET</span>' : "") + "</span>" +
@@ -1612,6 +1633,21 @@
     }
   });
 
+  /* ROUND 35 — hover OFF minimizes the collab panel: once the pointer
+     leaves the pop-up (chips added or not), it folds back to the FULL
+     button. The list stays in p.collabWith (renderRows → noteDraft keeps
+     the draft saved) and one click on the button reopens the panel. */
+  postRows.addEventListener("mouseout", function (ev) {
+    var pop = ev.target.closest ? ev.target.closest(".pcl-collabpop") : null;
+    if (!pop) return;
+    var to = ev.relatedTarget;
+    if (to && pop.contains(to)) return;      // still inside the panel
+    var mp = postById(pop.getAttribute("data-id"));
+    if (!mp || !mp.collab) return;
+    mp.collabOpen = false;
+    renderRows();
+  });
+
   /* screenshot + collab buttons */
   postRows.addEventListener("click", function (ev) {
     var btn = ev.target.closest("[data-act]");
@@ -1632,10 +1668,21 @@
     } else if (act === "collab") {
       var p = postById(id);
       if (!p) return;
-      p.collab = !p.collab;
+      /* ROUND 35 — three-state button: off → on (open); on+open → off;
+         on+minimized (hovered off) → reopen. The chips/emails stay saved
+         in every state — minimize only hides the panel. */
+      if (!p.collab) {
+        p.collab = true;
+        p.collabOpen = true;
+      } else if (p.collabOpen === false) {
+        p.collabOpen = true;
+      } else {
+        p.collab = false;
+        p.collabOpen = true;
+      }
       p.errCollab = false;
       renderRows();
-      if (p.collab) {
+      if (p.collab && p.collabOpen !== false) {
         var pop = postRows.querySelector('.pcl-post[data-id="' + id +
           '"] .pcl-collab-input');
         if (pop) pop.focus();
@@ -1663,6 +1710,7 @@
       var fp = postById(id);
       if (!fp) return;
       fp.collab = true;
+      fp.collabOpen = true;
       fp.collabWith = fp.collabForEmail || fp.collabWith;
       fp.collabFor = "";
       fp.collabForEmail = "";
@@ -1902,13 +1950,52 @@
              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return d.getDate() + " " + M[d.getMonth()];
   }
-  /* the ONLY selectable challenge = the week that is live right now */
+  /* "Week 2 — Best Storytelling Debut" → 2 — the same parse the backend's
+     wkNumOfLabel_ does, so both sides read a tag identically. */
+  function wkNumOf_(label) {
+    var m = String(label || "").match(/^Week\s+(\d+)\b/i);
+    return m ? Number(m[1]) : 0;
+  }
+  /* the ONLY selectable challenge = the week that is live right now.
+     ROUND 35 — the Control Room can CLOSE it: the option stays visible but
+     reads "— CLOSED" and is disabled, so nobody picks a gate that will
+     bounce. Regular ("Not entering") posts stay open unless the admins
+     pause the whole season (banner, below). */
+  function weekClosed_(w) {
+    if (!submitGates) return false;
+    if (!submitGates.seasonOpen) return true;
+    return submitGates.weeks && submitGates.weeks[String(w)] === false;
+  }
   function buildWeekOptions() {
     var cur = currentWeek();
     var c = CHALLENGES[cur - 1];
+    var seasonClosed = submitGates && !submitGates.seasonOpen;
+    var closed = weekClosed_(cur);
     week.innerHTML = '<option value="">Not entering</option>' +
-      '<option value="Week ' + cur + " — " + esc(c.name) + '">Week ' + cur +
-      " · " + esc(c.name) + "</option>";
+      '<option value="Week ' + cur + " — " + esc(c.name) + '"' +
+      (closed ? ' disabled' : "") + ">Week " + cur +
+      " · " + esc(c.name) + (closed ? " — CLOSED BY ADMINS" : "") +
+      "</option>";
+    /* the gate note — one line under the select, only when something is
+       actually closed; never rendered while everything is open */
+    var field = week.closest(".pcl-field");
+    var note = document.getElementById("pclGateNote");
+    if ((seasonClosed || closed) && field) {
+      if (!note) {
+        note = document.createElement("p");
+        note.id = "pclGateNote";
+        note.className = "pcl-gatenote";
+        field.appendChild(note);
+      }
+      note.textContent = seasonClosed
+        ? "Submissions are paused by the league admins — regular posts " +
+          "can't be sent either until they reopen the gates."
+        : "Week " + cur + " challenge entries are closed by the league " +
+          "admins — switch to \u201cNot entering\u201d to send regular posts.";
+      note.hidden = false;
+    } else if (note) {
+      note.hidden = true;
+    }
   }
 
   /* ---------- generic themed modal (info popup + rulebook) ---------- */
@@ -2417,6 +2504,10 @@
      roster/ledger name but not exact, surface a tap-to-use hint BEFORE
      the entry lands. Advisory only — it never blocks typing. */
   var statNames = null;               // ledger names, lazily fetched once
+  /* ROUND 35 — the Control Room's submission switches, refreshed at boot:
+     { seasonOpen: true, weeks: {"1": true, …} }. Absent = everything open
+     (old backend / offline) — the backend ingest re-checks regardless. */
+  var submitGates = null;
   function nameHintCheck() {
     var hint = $("pclNameHint");
     if (!hint) return;
@@ -2481,6 +2572,16 @@
       if (out && out.ok && Array.isArray(out.players)) {
         statNames = out.players.map(function (p) { return p.player; });
         nameHintCheck();
+      }
+      /* ROUND 35 — the Control Room's submission gates ride the same call:
+         a closed season or a closed live week re-renders the week select
+         and blocks challenge entries at submit (the backend re-checks). */
+      if (out && out.ok && out.gates) {
+        submitGates = {
+          seasonOpen: out.gates.seasonOpen !== false,
+          weeks: out.gates.weeks || {}
+        };
+        buildWeekOptions();
       }
     }).catch(function () { /* advisory only — offline is fine */ });
   } catch (e) { /* advisory only */ }
@@ -3331,6 +3432,15 @@
     if (!em) bad("playerEmail");
     else if (em.slice(-EMAIL_SUFFIX.length) !== EMAIL_SUFFIX) {
       bad("playerEmail", "Must end with " + EMAIL_SUFFIX);
+    }
+    /* ROUND 35 — gate check at submit: the boot-time gates may be fresher
+       than the select's options (admins closed a week mid-session). The
+       ingest re-checks server-side either way. */
+    if (submitGates && !submitGates.seasonOpen) {
+      bad("postLinks", "Submissions paused by admins");
+    }
+    if (week.value && weekClosed_(wkNumOf_(week.value))) {
+      bad("challengeWeek", "Closed by admins");
     }
     if (!photoShown && !photoState.file) {
       bad("playerPhoto", "Upload your photo.");

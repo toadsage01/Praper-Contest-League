@@ -258,6 +258,45 @@
 }
 .dir-tabbtn:focus-visible { outline: 2px solid var(--pcl-cyan); outline-offset: 2px; }
 
+/* ---------- week strip (ROUND 35 — screen ANY week) ---------- */
+.dir-weeks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dir-wchip {
+  font-family: var(--pcl-font-title);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pcl-muted);
+  background: var(--pcl-surface);
+  border: 3px solid var(--pcl-line);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.dir-wchip:hover { color: var(--pcl-text); border-color: var(--pcl-input-border); }
+.dir-wchip.is-on {
+  color: var(--pcl-on-primary);
+  background: var(--pcl-secondary);
+  border-color: var(--pcl-hard);
+  box-shadow: 3px 3px 0 var(--pcl-hard);
+}
+.dir-wchip.is-empty { opacity: 0.55; }
+.dir-wchip-n {
+  font-size: 10px;
+  min-width: 18px;
+  text-align: center;
+  padding: 1px 4px;
+  border: 2px solid currentColor;
+}
+.dir-wchip:focus-visible { outline: 2px solid var(--pcl-cyan); outline-offset: 2px; }
+
 /* ---------- POST / SCREENSHOT media switch ---------- */
 .dir-mediaswitch {
   display: flex;

@@ -294,6 +294,7 @@
   var mockEdits = {};   // sheet row → {ocrCount, crossCheck, verifiedCount}
   var MOCK_VERIFIED = {};  // normName → bool (mock identity verification)
   var MOCK_AWARDS = [];    // mock weekly-challenge rewards (PCL-Awards)
+  var MOCK_GATES = { seasonOpen: true, weeks: {} };   // mock submission gates
 
   function mockSvg(seed, big) {
     // tiny pixel analytics placeholder — deterministic per seed
@@ -464,6 +465,8 @@
           players: mockPlayers,
           rows: rows,
           awards: MOCK_AWARDS.slice(),
+          gates: { seasonOpen: MOCK_GATES.seasonOpen,
+                   weeks: JSON.parse(JSON.stringify(MOCK_GATES.weeks)) },
           log: mockLog
         });
       }, 220);
@@ -563,6 +566,25 @@
               detail: "weekly challenge reward" });
             resolve({ ok: true, awarded: { week: body.week, name: body.name,
                                            points: body.points } });
+            return;
+          }
+          if (body.action === "setGate") {
+            if (body.scope === "season") MOCK_GATES.seasonOpen = !!body.open;
+            else MOCK_GATES.weeks[String(body.week)] = !!body.open;
+            mockLog.unshift({ ts: new Date().toISOString(),
+              operator: state.operator || "unnamed", action: "GATE",
+              target: body.scope === "season" ? "season" : "week " + body.week,
+              detail: body.open ? "OPEN" : "CLOSED" });
+            resolve({ ok: true });
+            return;
+          }
+          if (body.action === "repairMediaIds") {
+            mockLog.unshift({ ts: new Date().toISOString(),
+              operator: state.operator || "unnamed", action: "REPAIR",
+              target: "media ids",
+              detail: "mock — nothing to rewrite" });
+            resolve({ ok: true, result: { scanned: mockRows().length,
+              rewritten: 0, cleared: 0, mergedKeys: 0 } });
             return;
           }
           mockLog.unshift({ ts: new Date().toISOString(),
@@ -780,6 +802,8 @@
     });
     state.totals = out.totals || null;
     state.generatedAt = out.generatedAt || null;
+    /* ROUND 35 — the submission switches, straight from the sheet */
+    state.gates = (out.gates && typeof out.gates === "object") ? out.gates : null;
     if (out.operator) {
       state.operator = out.operator;
       try { sessionStorage.setItem(OP_STORE, out.operator); } catch (e) { /* ok */ }
@@ -832,6 +856,7 @@
     renderPlayers();
     renderAudit();
     renderReports();
+    renderGates();
     renderLog();
     syncDirtyBar();
     setSync();
@@ -1886,9 +1911,29 @@
       PhotoLb.open(av.getAttribute("data-photo"), av.getAttribute("data-name"));
       return;
     }
+    if (ev.target.closest("[data-pv-name]")) return;   // handled below
+    if (ev.target.closest("a, button")) return;         // links + ticks behave
+    /* ROUND 35 — clicking anywhere else on the card opens the profile */
+    var card = ev.target.closest(".pcl-pcard");
+    if (card) {
+      var nameEl = card.querySelector(".pcl-pnametext");
+      var nm = nameEl ? nameEl.textContent.replace(/[\u2713\u2714]/g, "").trim() : "";
+      var agg = playerAgg().filter(function (x) {
+        return String(x.name).toLowerCase() === String(nm).toLowerCase();
+      })[0];
+      if (agg) openProfile(agg);
+    }
+  });
+  /* profile modal: expand photo + the identity tick button */
+  $("profBody").addEventListener("click", function (ev) {
+    var ph = ev.target.closest("[data-prof-photo]");
+    if (ph) PhotoLb.open(ph.getAttribute("data-prof-photo"), "");
+  });
+  /* the identity tick (CONFIRM ID / CLEAR TICK) — its own handler so the
+     card's profile-open click never swallows it */
+  $("playersList").addEventListener("click", function (ev) {
     var btn = ev.target.closest("[data-pv-name]");
     if (!btn) return;
-    var name = btn.getAttribute("data-pv-name");
     var to = btn.getAttribute("data-pv-to") === "1";
     btn.disabled = true;
     btn.textContent = "SAVING…";
@@ -2032,6 +2077,257 @@
         btn.textContent = "GIVE";
       });
   });
+
+  /* ============================================================================
+     SUBMISSION GATES (ROUND 35) — the admins' open/close power, enforced
+     server-side at ingest and mirrored onto the entry form at its next
+     page load. state.gates = { seasonOpen, weeks:{1..10} } — absent = open.
+     ========================================================================== */
+  function gateOf(w) {
+    var g = state.gates;
+    if (!g) return true;                       // old backend — everything open
+    if (g.seasonOpen === false) return false;
+    return !(g.weeks && g.weeks[String(w)] === false);
+  }
+  function renderGates() {
+    var master = $("gateMaster"), weeks = $("gateWeeks");
+    if (!master || !weeks) return;
+    var seasonOpen = state.gates ? state.gates.seasonOpen !== false : true;
+    master.innerHTML =
+      '<div class="pcl-gate-master' + (seasonOpen ? " is-open" : " is-closed") + '">' +
+        '<span class="pcl-gate-lab">WHOLE SEASON</span>' +
+        '<span class="pcl-gate-state">' + (seasonOpen ? "OPEN" : "CLOSED") + "</span>" +
+        '<button type="button" class="pcl-abtn' + (seasonOpen ? "" : " pcl-abtn--accent") +
+          '" data-gate="season" data-open="' + (seasonOpen ? "0" : "1") + '">' +
+          (seasonOpen ? "CLOSE SUBMISSIONS" : "REOPEN SUBMISSIONS") + "</button>" +
+      "</div>";
+    var cur = serverWeek();
+    var rows = "";
+    for (var w = 1; w <= WEEKS; w++) {
+      var open = gateOf(w);
+      rows += '<div class="pcl-gate-row' + (open ? " is-open" : " is-closed") +
+        (w === cur ? " is-live" : "") + '">' +
+        '<span class="pcl-gate-wk">W' + w + (w === cur ? ' <span class="pcl-tag">LIVE</span>' : "") + "</span>" +
+        '<span class="pcl-gate-lab2">' + esc(WEEK_THEMES[w] || "") + "</span>" +
+        '<span class="pcl-gate-state">' + (open ? "OPEN" : "CLOSED") + "</span>" +
+        '<button type="button" class="pcl-abtn pcl-abtn--small' + (open ? "" : " pcl-abtn--accent") +
+          '" data-gate="week" data-week="' + w + '" data-open="' + (open ? "0" : "1") + '"' +
+          ' title="' + (open ? "Close week " + w + " challenge entries"
+                             : "Reopen week " + w + " challenge entries") + '">' +
+          (open ? "CLOSE" : "OPEN") + "</button>" +
+        "</div>";
+    }
+    weeks.innerHTML = rows;
+  }
+  /* the week number the BACKEND clock says it is — state.rows' timestamps
+     use the local clock; the gates panel should match the server's window */
+  function serverWeek() {
+    var start = Date.parse("2026-10-19T11:00:00+05:30");
+    if (!isFinite(start)) return 0;
+    var t = Date.now();
+    if (t < start) return 0;
+    return Math.min(WEEKS, Math.floor((t - start) / 604800000) + 1);
+  }
+  $("gatePanel").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("[data-gate]");
+    if (!btn) return;
+    var scope = btn.getAttribute("data-gate");
+    var open = btn.getAttribute("data-open") === "1";
+    var body = { action: "setGate", adminKey: state.key, scope: scope, open: open };
+    if (scope === "week") body.week = Number(btn.getAttribute("data-week"));
+    var what = scope === "season"
+      ? (open ? "Reopen ALL submissions?" : "Close ALL submissions? Players cannot send anything until you reopen.")
+      : (open ? "Reopen W" + body.week + " challenge entries?"
+              : "Close W" + body.week + " challenge entries? Regular posts still go through.");
+    if (!window.confirm(what)) return;
+    btn.disabled = true;
+    gasPost(body)
+      .then(function (out) {
+        if (!out || out.ok === false) throw new Error((out && out.error) || "Gate write failed");
+        toast(scope === "season"
+          ? "Season submissions " + (open ? "OPEN" : "CLOSED")
+          : "Week " + body.week + " entries " + (open ? "OPEN" : "CLOSED"));
+        /* optimistic local flip — the next sync confirms from the sheet */
+        if (!state.gates) state.gates = { seasonOpen: true, weeks: {} };
+        if (scope === "season") state.gates.seasonOpen = open;
+        else {
+          state.gates.weeks = state.gates.weeks || {};
+          state.gates.weeks[String(body.week)] = open;
+        }
+        renderGates();
+      })
+      .catch(function (err) { toast(err.message || "Gate write failed", true); })
+      .finally(function () { btn.disabled = false; });
+  });
+
+  /* ---- REPAIR MEDIA IDS — one click, fixes the LinkedIn id era ---------- */
+  $("repairIdsBtn").addEventListener("click", function () {
+    if (!window.confirm("Rewrite every ledger Media ID to the canonical " +
+      "extraction now? This merges duplicate keys and lands in the Admin Log.")) return;
+    var btn = this, out = $("repairIdsOut");
+    btn.disabled = true;
+    var old = btn.textContent;
+    btn.textContent = "REPAIRING…";
+    out.hidden = true;
+    gasPost({ action: "repairMediaIds", adminKey: state.key })
+      .then(function (res) {
+        if (!res || res.ok === false) throw new Error((res && res.error) || "Repair failed");
+        var r = res.result || {};
+        out.textContent = "DONE — " + r.rewritten + " of " + r.scanned +
+          " rows rewritten" + (r.cleared ? " · " + r.cleared + " cleared to URL-key" : "") +
+          (r.mergedKeys ? " · " + r.mergedKeys + " duplicate keys merged" : "");
+        out.hidden = false;
+        toast("Media IDs repaired — " + r.rewritten + " rows rewritten");
+        return loadAll(true);
+      })
+      .catch(function (err) { toast(err.message || "Repair failed", true); })
+      .finally(function () { btn.disabled = false; btn.textContent = old; });
+  });
+
+  /* ============================================================================
+     PLAYER PROFILE MODAL (ROUND 35) — click a participant card in the
+     PLAYERS tab: identity + contest stats + every upload + per-app metrics,
+     built entirely from the synced ledger (no extra endpoint).
+     ========================================================================== */
+  var ProfModal = (function () {
+    var root = $("profModal"), body = $("profBody");
+    function open(html) {
+      body.innerHTML = html;
+      root.hidden = false;
+      document.body.style.overflow = "hidden";
+      var btn = root.querySelector(".pcl-lb-close");
+      if (btn) btn.focus();
+    }
+    function close() {
+      root.hidden = true;
+      document.body.style.overflow = "";
+    }
+    root.addEventListener("click", function (ev) {
+      if (ev.target.closest("[data-act='close']")) close();
+    });
+    document.addEventListener("keydown", function (ev) {
+      if (!root.hidden && ev.key === "Escape") close();
+    });
+    return { open: open, close: close };
+  })();
+
+  function playerRows(name) {
+    var who = String(name || "").toLowerCase();
+    return state.rows.filter(function (r) {
+      return String(r.name || "").toLowerCase() === who;
+    });
+  }
+  /* per-media latest row (UPDATE chains collapse to the newest snapshot) */
+  function latestByMedia(rows) {
+    var map = {};
+    rows.forEach(function (r) {
+      var k = r.mediaId || "row:" + r.row;
+      if (!map[k] || String(r.ts).localeCompare(String(map[k].ts)) > 0) map[k] = r;
+    });
+    return Object.keys(map).map(function (k) { return map[k]; });
+  }
+  function profileMetrics(rows) {
+    var per = { ig: { posts: 0, views: 0 }, yt: { posts: 0, views: 0 }, li: { posts: 0, views: 0 } };
+    var best = null;
+    latestByMedia(rows).forEach(function (r) {
+      var fam = String(r.format || "").indexOf("ig_") === 0 ? "ig"
+        : String(r.format || "").indexOf("yt_") === 0 ? "yt"
+        : String(r.format || "") === "li_post" ? "li" : "";
+      var d = displayOf(r);
+      var views = d.verified !== "" ? Number(d.verified) || 0
+        : (Number(r.claimed) || 0);
+      if (fam && per[fam]) { per[fam].posts++; per[fam].views += views; }
+      var pts = Number(r.projected) || 0;
+      if (!best || pts > best.pts) best = { url: r.url, format: r.format, pts: pts, views: views };
+    });
+    return { per: per, best: best };
+  }
+  function profRowHtml(r) {
+    var d = displayOf(r);
+    var views = d.verified !== "" ? fmt(d.verified) + " ✓" :
+                (d.ocr !== "" ? fmt(d.ocr) : fmt(r.claimed));
+    var stat = d.check === "OK" ? '<span class="pcl-tag">OK</span>'
+      : d.verified !== "" ? '<span class="pcl-tag">VERIFIED</span>'
+      : '<span class="pcl-tag pcl-tag--mut">' + esc(String(d.check || "PENDING")) + "</span>";
+    return '<tr>' +
+      '<td>' + brandBadgeAdm(r.format) + " " + esc(fmtShort(r.format)) + "</td>" +
+      '<td class="num">' + views + "</td>" +
+      '<td class="num">' + fmt(r.projected) + "</td>" +
+      "<td>" + (r.week ? esc(r.week.split("—")[0].trim()) : '<span class="pcl-muted-cell">—</span>') + "</td>" +
+      "<td>" + (r.collabStatus === "CONFIRMED" ? "COLLAB" :
+                (r.collabWith ? "invited" : '<span class="pcl-muted-cell">—</span>')) + "</td>" +
+      "<td>" + stat + "</td>" +
+      '<td><a href="' + esc(safeHref(r.url)) + '" target="_blank" rel="noopener">open &#8599;</a>' +
+        (r.shotUrl ? ' · <a href="' + esc(safeHref(r.shotUrl)) +
+          '" target="_blank" rel="noopener">shot</a>' : "") + "</td>" +
+      "</tr>";
+  }
+  function playerProfileHtml(a, rows) {
+    var ident = pmapOf(a.name) || {};
+    var m = profileMetrics(rows);
+    var rank = playerAgg().findIndex(function (x) {
+      return String(x.name).toLowerCase() === String(a.name).toLowerCase();
+    }) + 1;
+    var ava = a.photoData || a.photoId
+      ? '<img class="pcl-prof-ava" src="' + esc(a.photoData ||
+          ("https://drive.google.com/thumbnail?id=" + encodeURIComponent(a.photoId) + "&sz=w200")) +
+        '" alt="" />' +
+        '<button type="button" class="pcl-abtn pcl-abtn--small" data-prof-photo="' +
+        esc(a.photoData || ("https://drive.google.com/thumbnail?id=" +
+          encodeURIComponent(a.photoId) + "&sz=w800")) + '">EXPAND</button>'
+      : '<span class="pcl-pavatar pcl-pavatar--letter pcl-prof-ava" aria-hidden="true">' +
+        esc((a.name || "?").charAt(0).toUpperCase()) + "</span>";
+    var email = "";
+    rows.forEach(function (r) { if (!email && r.email) email = r.email; });
+    var bal = balanceHtml(a);
+    var mix = mixShort(a);
+    var latestRows = latestByMedia(rows)
+      .sort(function (x, y) { return String(y.ts).localeCompare(String(x.ts)); });
+    var tbl = latestRows.length
+      ? "<table class='pcl-table pcl-prof-tbl'><thead><tr>" +
+        "<th>POST</th><th class='num'>VIEWS</th><th class='num'>PROJ PTS</th>" +
+        "<th>WEEK</th><th>COLLAB</th><th>STATUS</th><th>LINKS</th>" +
+        "</tr></thead><tbody>" + latestRows.map(profRowHtml).join("") + "</tbody></table>"
+      : '<p class="pcl-empty">No uploads yet.</p>';
+    return '<div class="pcl-prof-head">' +
+        ava +
+        '<div class="pcl-prof-id">' +
+          '<p class="pcl-prof-name">' + esc(a.name) +
+            (ident.verified ? " " + TICK_SVG : "") + "</p>" +
+          '<p class="pcl-prof-sub">' +
+            (ident.designation ? esc(ident.designation) + " · " : "") +
+            "mgr " + esc(a.manager || "–") +
+            (email ? " · " + esc(email) : "") +
+            (rank ? ' · <b>#' + rank + "</b> on the board" : "") +
+          "</p>" +
+          (bal ? '<p class="pcl-pbal">' + bal + "</p>" : "") +
+        "</div>" +
+      "</div>" +
+      '<div class="pcl-prof-stats">' +
+        pstat("LEADERBOARD PTS", fmt(a.vpts ? a.vpts : a.ppts), true) +
+        pstat("VERIFIED", a.vpts ? fmt(a.vpts) : "–") +
+        pstat("PROJECTED", fmt(a.ppts)) +
+        pstat("VIEWS", fmt(a.views)) +
+        pstat("POSTS", a.uniqueMedia) +
+        pstat("APPS", a.apps) +
+      "</div>" +
+      '<div class="pcl-prof-apps">' +
+        pstat("INSTAGRAM", m.per.ig.posts + " · " + fmt(m.per.ig.views) + " views") +
+        pstat("YOUTUBE", m.per.yt.posts + " · " + fmt(m.per.yt.views) + " views") +
+        pstat("LINKEDIN", m.per.li.posts + " · " + fmt(m.per.li.views) + " views") +
+        (mix ? pstat("FORMAT MIX", mix) : "") +
+      "</div>" +
+      (m.best ? '<p class="pcl-prof-best">BEST POST — ' +
+        brandBadgeAdm(m.best.format) + " " + fmt(m.best.pts) + " pts · " +
+        fmt(m.best.views) + " views · <a href=\"" + esc(safeHref(m.best.url)) +
+        '" target="_blank" rel="noopener">open &#8599;</a></p>' : "") +
+      "<h3 class='pcl-prof-h3'>UPLOADED CONTENT — " + latestRows.length + " post" +
+      (latestRows.length === 1 ? "" : "s") + " (latest snapshot each)</h3>" +
+      tbl;
+  }
+  function openProfile(a) {
+    ProfModal.open(playerProfileHtml(a, playerRows(a.name)));
+  }
 
   /* ============================================================================
      CSV EXPORT — full ledger, client-side

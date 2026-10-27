@@ -304,7 +304,11 @@
       }
       nav.appendChild(b);
     }
-    chip("ALL-SEASON", "all", state.view === "all" ? "is-active" : "");
+    /* ROUND 35 — the all-time tab reads "SEASON 2" (counts EVERYTHING:
+       weekly-challenge uploads AND regular posts, deduped). The W tabs now
+       carry weekly-challenge uploads only. */
+    chip("SEASON 2", "all", state.view === "all" ? "is-active" : "",
+      "The whole season — challenges + regular posts");
     for (var w = 1; w <= (d.weeks.total || 10); w++) {
       var cls = [];
       if (state.view === w) cls.push("is-active");
