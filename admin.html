@@ -31,7 +31,7 @@
 
   <!-- Shared pixel design system + admin console components -->
   <link rel="stylesheet" href="css/theme.css" />
-  <link rel="stylesheet" href="css/admin.css" />
+  <link rel="stylesheet" href="css/admin.css?v=20261027d" />
 </head>
 <body>
   <!-- Arcade marquee: the PCL logo's native dark band, both themes.
@@ -261,7 +261,9 @@
             Weeks whose Tuesday 6:00 PM lock has passed show PAST below —
             reopen one from the strip when someone needs more time; a closed
             gate always wins over a reopen, and nothing about this reaches
-            the players' screens.</p>
+            the players' screens. Weeks that have not started yet show
+            UPCOMING — a week reaches the entry form while its window is
+            open or while a reopen is active, never before.</p>
           <div class="pcl-gates" id="gatePanel">
             <div class="pcl-gates-master" id="gateMaster"></div>
             <div class="pcl-gates-weeks" id="gateWeeks"></div>
@@ -430,6 +432,6 @@
   </div>
 
   <script src="js/gas-endpoint.js?v=20261027c"></script>
-  <script src="js/admin.js"></script>
+  <script src="js/admin.js?v=20261027d"></script>
 </body>
 </html>

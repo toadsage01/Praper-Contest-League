@@ -1108,6 +1108,9 @@ html[data-pcl-theme="dark"] .pcl-award input {
 }
 .pcl-gate-row.is-open .pcl-gate-state { color: #1d9e57; }
 .pcl-gate-row.is-closed .pcl-gate-state { color: var(--pcl-primary, #ed3b00); }
+/* window not started yet — muted, never reads as enterable */
+.pcl-gate-row.is-upcoming { border-left-color: #b3ad9e; }
+.pcl-gate-row.is-upcoming .pcl-gate-state { color: var(--pcl-muted, #6b675c); }
 
 /* player profile modal */
 .pcl-prof-card {

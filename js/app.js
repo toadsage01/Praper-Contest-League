@@ -2623,9 +2623,16 @@
          a closed season or a closed live week re-renders the week select
          and blocks challenge entries at submit (the backend re-checks). */
       if (out && out.ok && out.gates) {
+        /* ROUND 37 FIX — carry the WHOLE public gates shape. allowedWeeks is
+           the backend's enterable list (live week + pre-lock weeks + past
+           weeks the league reopened); dropping it pinned the form to the
+           live week only, so reopened / earlier-in-grace weeks never showed. */
         submitGates = {
           seasonOpen: out.gates.seasonOpen !== false,
-          weeks: out.gates.weeks || {}
+          weeks: out.gates.weeks || {},
+          reopen: out.gates.reopen || {},
+          allowedWeeks: Array.isArray(out.gates.allowedWeeks)
+            ? out.gates.allowedWeeks.slice() : null
         };
         buildWeekOptions();
       }

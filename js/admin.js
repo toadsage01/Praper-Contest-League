@@ -2117,10 +2117,16 @@
       var dlPassed = weekDeadlineOf(w) <= Date.now();
       var reopened = !!(state.gates && state.gates.reopen &&
                         state.gates.reopen[String(w)]);
-      var stateLab = reopened ? "REOPENED"
-        : (dlPassed ? "PAST" : (open ? "OPEN" : "CLOSED"));
+      /* label truth — a closed switch always reads CLOSED (server-side a
+         closed gate beats a reopen), a past-lock week reads PAST unless a
+         reopen is active, and a week whose window has not started yet reads
+         UPCOMING, never OPEN — the entry form does not offer it yet */
+      var stateLab = !open ? "CLOSED"
+        : (dlPassed ? (reopened ? "REOPENED" : "PAST")
+        : (w > cur ? "UPCOMING" : "OPEN"));
       rows += '<div class="pcl-gate-row' + (open ? " is-open" : " is-closed") +
-        (w === cur ? " is-live" : "") + '">' +
+        (w === cur ? " is-live" : "") +
+        (open && !dlPassed && w > cur ? " is-upcoming" : "") + '">' +
         '<span class="pcl-gate-wk">W' + w + (w === cur ? ' <span class="pcl-tag">LIVE</span>' : "") + "</span>" +
         '<span class="pcl-gate-lab2">' + esc(WEEK_THEMES[w] || "") + "</span>" +
         '<span class="pcl-gate-state' + (reopened ? " is-reopened" : "") + '">' + stateLab + "</span>" +
