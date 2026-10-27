@@ -295,6 +295,19 @@
   var MOCK_VERIFIED = {};  // normName → bool (mock identity verification)
   var MOCK_AWARDS = [];    // mock weekly-challenge rewards (PCL-Awards)
   var MOCK_GATES = { seasonOpen: true, weeks: {}, reopen: {} };   // mock submission gates
+  /* mock PFP roster (ROUND 38) — two thumbs, one letter-avatar, so every
+     card shape is visible offline; setPfp mutates these like the sheet */
+  var MOCK_PFPS = [
+    { name: "Manas Ranjan", slug: "manas-ranjan", photo: "",
+      thumb: "https://picsum.photos/seed/pclpfp1/200",
+      decision: "", updated: "", updatedBy: "" },
+    { name: "Lagan Garg", slug: "lagan-garg", photo: "",
+      thumb: "https://picsum.photos/seed/pclpfp2/200",
+      decision: "APPROVED", updated: "2026-10-26T10:00:00.000Z",
+      updatedBy: "Vikram" },
+    { name: "Priya Sharma", slug: "priya-sharma", photo: "",
+      thumb: "", decision: "", updated: "", updatedBy: "" }
+  ];
 
   function mockSvg(seed, big) {
     // tiny pixel analytics placeholder — deterministic per seed
@@ -594,6 +607,25 @@
               rewritten: 0, cleared: 0, mergedKeys: 0 } });
             return;
           }
+          if (body.action === "listPfps") {
+            resolve({ ok: true, pfps: MOCK_PFPS.map(function (p) {
+              return JSON.parse(JSON.stringify(p)); }) });
+            return;
+          }
+          if (body.action === "setPfp") {
+            var mp = MOCK_PFPS.filter(function (p) { return p.name === body.name; })[0];
+            if (mp) {
+              mp.decision = body.decision === "remove" ? "REMOVED" : "APPROVED";
+              if (body.decision === "remove") mp.thumb = "";   // drive file trashed
+            }
+            mockLog.unshift({ ts: new Date().toISOString(),
+              operator: state.operator || "unnamed", action: "PFP",
+              target: body.name,
+              detail: body.decision === "remove"
+                ? "PFP REMOVED — drive file trashed (mock)" : "PFP APPROVED (mock)" });
+            resolve({ ok: true, name: body.name, decision: body.decision });
+            return;
+          }
           mockLog.unshift({ ts: new Date().toISOString(),
             operator: body.operator || "unnamed", action: "VERIFY",
             target: (body.updates || []).length + " row(s)",
@@ -627,6 +659,7 @@
     awards: [],          // weekly-challenge rewards (PCL-Awards)
     awardByWeek: {},     // week → { total, list:[{player,points,note}] }
     pending: {},          // sheet row → {ocrCount?, crossCheck?, verifiedCount?, contentType?}
+    pfps: null,           // ROUND 38 — [{name, slug, thumb, decision, updated, updatedBy}]
     filters: { q: "", week: "all", format: "all", status: "all", type: "all", ctype: "all" },
     plats: [],            // participants tab: selected platform keys ['ig','yt','li']
     pq: "",               // participants tab search
@@ -778,6 +811,7 @@
     $("gate").hidden = true;
     $("console").hidden = false;
     showOperator();
+    loadPfps(true);   /* ROUND 38 — the PFP grid rides every unlock */
   }
 
   /* ============================================================================
@@ -2222,6 +2256,100 @@
       })
       .catch(function (err) { toast(err.message || "Gate write failed", true); })
       .finally(function () { btn.disabled = false; });
+  });
+
+  /* ============================================================================
+     PLAYER PFPs (ROUND 38) — approve / remove. Backed by the PCL-PFP tab +
+     the Drive photo folder: APPROVE records the decision; REMOVE trashes
+     the Drive file, blanks every Player Photo ledger cell of that player
+     (newest-non-empty-wins roll-up) and records REMOVED — after which the
+     entry form's photo lookup reports nothing on file until a re-upload.
+     ========================================================================== */
+  function loadPfps(silent) {
+    if (!state.key) return Promise.resolve();
+    if (!silent) $("pfpState").textContent = "SYNCING\u2026";
+    return gasPost({ action: "listPfps", adminKey: state.key })
+      .then(function (out) {
+        if (!out || out.ok === false) {
+          throw new Error((out && out.error) || "PFP list failed");
+        }
+        state.pfps = out.pfps || [];
+        $("pfpState").textContent = state.pfps.length +
+          " photo record" + (state.pfps.length === 1 ? "" : "s");
+        renderPfps();
+      })
+      .catch(function (err) {
+        $("pfpState").textContent = "PFP sync failed";
+        if (!silent) toast(err.message || "PFP list failed", true);
+      });
+  }
+  function renderPfps() {
+    var grid = $("pfpGrid");
+    if (!grid) return;
+    var list = state.pfps || [];
+    $("pfpEmpty").hidden = list.length > 0;
+    grid.innerHTML = list.map(function (p) {
+      var chip = p.decision === "APPROVED"
+        ? '<span class="pcl-pfp-chip is-approved">APPROVED</span>'
+        : p.decision === "REMOVED"
+          ? '<span class="pcl-pfp-chip is-removed">REMOVED</span>'
+          : '<span class="pcl-pfp-chip">ON FILE</span>';
+      var meta = p.updated
+        ? esc(String(p.updated).split("T")[0]) +
+          (p.updatedBy ? " \u00b7 " + esc(p.updatedBy) : "")
+        : "no decision yet";
+      return '<div class="pcl-pfp-card' +
+          (p.decision === "REMOVED" ? " is-removed" : "") +
+          '" data-pfpname="' + esc(p.name) + '">' +
+        '<span class="pcl-pfp-thumb">' +
+          (p.thumb
+            ? '<img src="' + esc(p.thumb) + '" alt="" loading="lazy" />'
+            : '<span class="pcl-pfp-letter">' +
+              esc((p.name || "?").charAt(0).toUpperCase()) + "</span>") +
+        "</span>" +
+        '<span class="pcl-pfp-name" title="' + esc(p.name) + '">' +
+          esc(p.name) + "</span>" +
+        chip +
+        '<span class="pcl-pfp-meta">' + meta + "</span>" +
+        '<span class="pcl-pfp-btns">' +
+          '<button type="button" class="pcl-abtn pcl-abtn--small"' +
+            ' data-pfp="approve"' + (p.decision === "APPROVED" ? " disabled" : "") +
+            '>APPROVE</button>' +
+          '<button type="button" class="pcl-abtn pcl-abtn--small pcl-abtn--danger"' +
+            ' data-pfp="remove"' + (p.decision === "REMOVED" ? " disabled" : "") +
+            '>REMOVE</button>' +
+        "</span>" +
+      "</div>";
+    }).join("");
+  }
+  $("pfpRefresh").addEventListener("click", function () { loadPfps(); });
+  $("pfpGrid").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("[data-pfp]");
+    if (!btn || btn.disabled) return;
+    var card = btn.closest("[data-pfpname]");
+    var name = card ? card.getAttribute("data-pfpname") : "";
+    var decision = btn.getAttribute("data-pfp");
+    var what = decision === "remove"
+      ? "Remove " + name + "'s photo? The Drive file goes to trash and every " +
+        "ledger row loses it \u2014 the entry form then reports no photo on " +
+        "file until they upload a new one."
+      : "Approve " + name + "'s photo? The decision lands on the PCL-PFP " +
+        "tab and in the Admin Log.";
+    if (!window.confirm(what)) return;
+    btn.disabled = true;
+    gasPost({ action: "setPfp", adminKey: state.key, name: name, decision: decision })
+      .then(function (out) {
+        if (!out || out.ok === false) {
+          throw new Error((out && out.error) || "PFP write failed");
+        }
+        toast("Photo " + (decision === "remove" ? "REMOVED" : "APPROVED") +
+              " \u2014 " + name);
+        return loadPfps(true);
+      })
+      .catch(function (err) {
+        toast(err.message || "PFP write failed", true);
+        btn.disabled = false;
+      });
   });
 
   /* ---- REPAIR MEDIA IDS — one click, fixes the LinkedIn id era ---------- */

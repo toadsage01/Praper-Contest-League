@@ -283,6 +283,8 @@ function doPostLocked_(e) {
     if (payload && payload.action === 'awardChallenge') return awardChallenge_(payload);
     if (payload && payload.action === 'setGate') return setGate_(payload);
     if (payload && payload.action === 'repairMediaIds') return repairMediaIds_(payload);
+    if (payload && payload.action === 'listPfps') return listPfps_(payload);
+    if (payload && payload.action === 'setPfp') return setPfp_(payload);
 
     var id = payload.submissionId || Utilities.getUuid();
     var d = payload.data || {};
@@ -570,6 +572,7 @@ function doGet(e) {
     if (p.action === 'subcheck') return subcheckEndpoint_(p);
     if (p.action === 'checklink') return checklinkEndpoint_(p);
     if (p.action === 'playerPhoto') return playerPhotoEndpoint_(p);
+    if (p.action === 'gallery') return galleryEndpoint_(p);
     if (p.action === 'directorFeed') return directorFeed_(p);
     if (p.action === 'directorNote') return directorNote_(p);
     if (p.action === 'employeeLogin') return employeeLogin_(p);
@@ -595,6 +598,44 @@ function publicPlayer_(p) {
     if (k !== 'verified' && k !== 'manager') c[k] = p[k];
   });
   return c;
+}
+
+/** Public feed for the leaderboard's ENTRY THEATRE (Round 38) — ONLY the
+ *  fields the pop-up renders: name, post url, media id, format, week label,
+ *  timestamp, player photo. Deliberately NOT the ledger rows: no emails,
+ *  no managers, no claimed/verified numbers, no OCR/cross-check state, no
+ *  screenshots, no submission ids — a public surface carries nothing
+ *  internal (same policy as publicPlayer_'s strip list). */
+function galleryEndpoint_(p) {
+  try {
+    var sheet = getSheet_();
+    var lastRow = sheet.getLastRow();
+    var rows = [];
+    if (lastRow >= 2) {
+      var c = {};
+      HEADERS.forEach(function (h, i) { c[h] = i; });
+      var vals = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+      vals.forEach(function (r) {
+        var name = str_(r[c['Full Name']]);
+        var url = str_(r[c['Post URL']]);
+        var mid = str_(r[c['Media ID']]);
+        if (!name || (!url && !mid)) return;
+        var photo = c['Player Photo'] !== undefined ? str_(r[c['Player Photo']]) : '';
+        rows.push({
+          name: name, url: url, mediaId: mid,
+          format: str_(r[c['Format']]),
+          week: str_(r[c['Weekly Challenge']]),
+          ts: r[c['Timestamp']] instanceof Date
+            ? r[c['Timestamp']].toISOString() : str_(r[c['Timestamp']]),
+          photo: photo,
+          photoId: photo ? driveFileId_(photo) : ''
+        });
+      });
+    }
+    return reply_(p, { ok: true, rows: rows });
+  } catch (err) {
+    return reply_(p, { ok: false, rows: [], error: String(err) });
+  }
 }
 
 function statsEndpoint_(p) {
@@ -2530,6 +2571,167 @@ function playerPhotoEndpoint_(p) {
     return reply_(p, out);
   } catch (err) {
     return reply_(p, { ok: false, error: String(err) });
+  }
+}
+
+/** ---------- PFP MODERATION (ROUND 38) ----------
+ *  The Control Room can APPROVE or REMOVE a player's profile photo.
+ *  · approve → records the decision on the PCL-PFP tab + AdminLog trail
+ *  · remove  → trashes the Drive file, blanks every Player Photo ledger
+ *              cell of that player, records REMOVED — the form lookup then
+ *              answers 'no photo on file' until they upload again
+ *  No decision recorded = ON FILE (live, exactly as before this round, so
+ *  nothing changes for players until an admin acts). */
+var PFP_SHEET = 'PCL-PFP';
+
+function getPfpSheet_() {
+  var ss = getSpreadsheet_();
+  var sh = ss.getSheetByName(PFP_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(PFP_SHEET);
+    sh.appendRow(['Key', 'Player', 'Decision', 'Updated', 'Updated By']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** Read pass → { slug: {decision, player, updated, by} }. A decision reads
+ *  only for an exact APPROVED / REMOVED — anything else = unreviewed. */
+function readPfpDecisions_() {
+  var out = {};
+  try {
+    var sh = getPfpSheet_();
+    var last = sh.getLastRow();
+    if (last < 2) return out;
+    var vals = sh.getRange(2, 1, last - 1, 5).getValues();
+    vals.forEach(function (r) {
+      var k = str_(r[0]).trim();
+      var d = str_(r[2]).trim().toUpperCase();
+      if (!k || (d !== 'APPROVED' && d !== 'REMOVED')) return;
+      out[k] = { decision: d, player: str_(r[1]),
+                 updated: str_(r[3]), by: str_(r[4]) };
+    });
+  } catch (ignore) { /* tab absent → nothing decided yet */ }
+  return out;
+}
+
+/** Upsert one decision row (key = the player's name slug). */
+function writePfpRow_(slug, player, decision, operator) {
+  var sh = getPfpSheet_();
+  var last = sh.getLastRow();
+  var vals = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues() : [];
+  for (var i = 0; i < vals.length; i++) {
+    if (str_(vals[i][0]).trim() === slug) {
+      sh.getRange(i + 2, 2, 1, 4).setValues(
+        [[player, decision, new Date(), operator || 'console']]);
+      return;
+    }
+  }
+  sh.appendRow([slug, player, decision, new Date(), operator || 'console']);
+}
+
+/** Blank the Player Photo cell of every ledger row belonging to one player.
+ *  removePfp_ needs the FULL sweep: the photo roll-up is newest-non-empty-
+ *  wins, so clearing only the latest row would let an older snapshot's URL
+ *  resurrect the photo. One column read, one column write. */
+function clearPhotoCells_(sheet, name) {
+  var who = normName_(name);
+  if (!who) return 0;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var col = HEADERS.indexOf('Player Photo');
+  var nameCol = HEADERS.indexOf('Full Name');
+  if (col < 0 || nameCol < 0) return 0;
+  var names = sheet.getRange(2, nameCol + 1, lastRow - 1, 1).getValues();
+  var photos = sheet.getRange(2, col + 1, lastRow - 1, 1).getValues();
+  var cleared = 0;
+  for (var i = 0; i < names.length; i++) {
+    if (normName_(names[i][0]) === who && str_(photos[i][0]) !== '') {
+      photos[i][0] = '';
+      cleared++;
+    }
+  }
+  if (cleared) sheet.getRange(2, col + 1, lastRow - 1, 1).setValues(photos);
+  return cleared;
+}
+
+/** Admin POST — {action:'listPfps', adminKey} → every player that has (or
+ *  had, before a removal) a photo on file, with the recorded decision. */
+function listPfps_(payload) {
+  var err = checkAdmin_(payload.adminKey);
+  if (err) return json_({ ok: false, error: err });
+  try {
+    var sheet = getSheet_();
+    var lastRow = sheet.getLastRow();
+    var decisions = readPfpDecisions_();
+    var byName = {};                       // normName → {name, photo}
+    if (lastRow >= 2) {
+      var nCol = HEADERS.indexOf('Full Name');
+      var pCol = HEADERS.indexOf('Player Photo');
+      if (nCol >= 0 && pCol >= 0) {
+        var vals = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+        vals.forEach(function (r) {
+          var name = str_(r[nCol]);
+          if (!name) return;
+          var key = normName_(name);
+          var photo = str_(r[pCol]);
+          if (!byName[key]) byName[key] = { name: name, photo: '' };
+          if (photo) byName[key].photo = photo;   // newest non-empty wins
+        });
+      }
+    }
+    var list = [];
+    Object.keys(byName).forEach(function (k) {
+      var e = byName[k];
+      var slug = slugify_(e.name);
+      var dec = decisions[slug];
+      if (!e.photo && (!dec || dec.decision !== 'REMOVED')) return;  // never had one
+      var id = e.photo ? driveFileId_(e.photo) : '';
+      list.push({
+        name: e.name, slug: slug, photo: e.photo, photoId: id,
+        thumb: id ? ('https://drive.google.com/thumbnail?id=' + id + '&sz=w400') : '',
+        decision: dec ? dec.decision : '',
+        updated: dec ? dec.updated : '',
+        updatedBy: dec ? dec.by : ''
+      });
+    });
+    list.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return json_({ ok: true, pfps: list });
+  } catch (err2) {
+    return json_({ ok: false, error: String(err2) });
+  }
+}
+
+/** Admin POST — {action:'setPfp', adminKey, name, decision:'approve'|'remove'}.
+ *  A closed anything never blocks this — photos are identity, not entries. */
+function setPfp_(payload) {
+  var err = checkAdmin_(payload.adminKey);
+  if (err) return json_({ ok: false, error: err });
+  var name = str_(payload.name).trim();
+  var decision = String(payload.decision || '').toLowerCase();
+  if (!name) return json_({ ok: false, error: 'Player name is required.' });
+  if (decision !== 'approve' && decision !== 'remove') {
+    return json_({ ok: false, error: "Decision must be 'approve' or 'remove'." });
+  }
+  var operator = operatorOf_(payload) || 'console';
+  var slug = slugify_(name);
+  try {
+    var cleared = 0, trashed = false;
+    if (decision === 'remove') {
+      trashPhotos_(getPhotoFolder_(getDriveFolder_()), slug);
+      trashed = true;
+      cleared = clearPhotoCells_(getSheet_(), name);
+    }
+    writePfpRow_(slug, name, decision === 'approve' ? 'APPROVED' : 'REMOVED', operator);
+    logAdmin_(operator, 'PFP', name, decision === 'approve'
+      ? 'PFP APPROVED'
+      : 'PFP REMOVED — drive file trashed' +
+        (cleared ? ', ' + cleared + ' ledger cell(s) cleared' : ''));
+    return json_({ ok: true, name: name, slug: slug,
+                   decision: decision === 'approve' ? 'APPROVED' : 'REMOVED',
+                   clearedCells: cleared });
+  } catch (err2) {
+    return json_({ ok: false, error: String(err2) });
   }
 }
 

@@ -31,7 +31,7 @@
 
   <!-- Shared pixel design system + admin console components -->
   <link rel="stylesheet" href="css/theme.css" />
-  <link rel="stylesheet" href="css/admin.css?v=20261027d" />
+  <link rel="stylesheet" href="css/admin.css?v=20261027e" />
 </head>
 <body>
   <!-- Arcade marquee: the PCL logo's native dark band, both themes.
@@ -202,6 +202,27 @@
           <div id="playersList" class="pcl-plist"></div>
           <p class="pcl-empty" id="playersEmpty" hidden>No participants yet —
             the roster fills in as entries land.</p>
+        </div>
+
+        <!-- ROUND 38 — PLAYER PFP MODERATION: one photo per participant
+             (Drive folder + ledger roll-up); approve records it, remove
+             trashes the file and blanks the ledger cells -->
+        <div class="pcl-panel pcl-pfppanel">
+          <h2 class="pcl-panel-title">Player PFPs — Approve / Remove</h2>
+          <p class="pcl-hint">One photo per participant lives in the Drive
+            folder and rides every entry. APPROVE records that the photo is
+            checked; REMOVE trashes the Drive file and blanks it from every
+            ledger row — the entry form then reports no photo on file
+            until the participant uploads a new one. Both actions land in
+            the Admin Log.</p>
+          <div class="pcl-pfp-bar">
+            <button type="button" class="pcl-abtn pcl-abtn--small"
+                    id="pfpRefresh">RELOAD PFPS</button>
+            <span class="pcl-pfp-state" id="pfpState"></span>
+          </div>
+          <div class="pcl-pfp-grid" id="pfpGrid"></div>
+          <p class="pcl-empty" id="pfpEmpty" hidden>No photos on file yet —
+            the grid fills as participants upload.</p>
         </div>
       </section>
 
@@ -432,6 +453,6 @@
   </div>
 
   <script src="js/gas-endpoint.js?v=20261027c"></script>
-  <script src="js/admin.js?v=20261027d"></script>
+  <script src="js/admin.js?v=20261027e"></script>
 </body>
 </html>

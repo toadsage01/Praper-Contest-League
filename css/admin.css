@@ -1148,3 +1148,50 @@ span.pcl-prof-ava { display: inline-flex; align-items: center; justify-content: 
   font-family: var(--pcl-font-title, inherit); font-weight: 700;
   letter-spacing: 0.8px; border: 2px solid currentColor; }
 .pcl-tag--mut { opacity: 0.65; }
+
+/* ============================================================================
+   ROUND 38 — PLAYER PFP MODERATION (PLAYERS tab, under the roster)
+   ========================================================================== */
+.pcl-pfppanel { margin-top: 14px; }
+.pcl-pfp-bar { display: flex; align-items: center; gap: 12px; margin: 10px 0 12px; }
+.pcl-pfp-state { font-size: 12px; color: var(--pcl-muted, #6b675c); }
+.pcl-pfp-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+.pcl-pfp-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center; padding: 14px 10px 12px;
+  border: 2px solid var(--pcl-line-soft, #e3ddcf);
+  border-left: 6px solid #b3ad9e; border-radius: 12px;
+  background: var(--pcl-surface, #fffaf0);
+}
+.pcl-pfp-card.is-removed { opacity: 0.75; border-left-color: var(--pcl-primary, #ed3b00); }
+.pcl-pfp-thumb {
+  width: 76px; height: 76px; border-radius: 50%; overflow: hidden;
+  border: 3px solid var(--pcl-panel-border, #14235f);
+  box-shadow: 3px 3px 0 var(--pcl-hard, #14235f);
+  background: var(--pcl-surface-3, #f1ead8);
+  display: flex; align-items: center; justify-content: center;
+}
+.pcl-pfp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pcl-pfp-letter {
+  font-family: var(--pcl-font-title, inherit); font-weight: 800; font-size: 26px;
+  color: var(--pcl-primary, #ed3b00);
+}
+.pcl-pfp-name {
+  font-weight: 700; font-size: 13px; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pcl-pfp-chip {
+  font-family: var(--pcl-font-title, inherit); font-weight: 800; font-size: 10px;
+  letter-spacing: 1.2px; color: var(--pcl-muted, #6b675c);
+  background: var(--pcl-surface-3, #f1ead8); border-radius: 999px; padding: 3px 10px;
+}
+.pcl-pfp-chip.is-approved { color: #fff; background: #1d9e57; }
+.pcl-pfp-chip.is-removed { color: #fff; background: var(--pcl-primary, #ed3b00); }
+.pcl-pfp-meta { font-size: 11px; color: var(--pcl-muted, #6b675c); }
+.pcl-pfp-btns { display: flex; gap: 8px; }
+.pcl-abtn--danger { border-color: var(--pcl-primary, #ed3b00); color: var(--pcl-primary, #ed3b00); }
+.pcl-abtn--danger:hover { background: var(--pcl-primary, #ed3b00); color: #fff; }
+.pcl-abtn:disabled { opacity: 0.45; cursor: default; }

@@ -129,7 +129,34 @@
     </div>
   </div>
 
+  <!-- ROUND 38 — THE ENTRY THEATRE: click a standings row and an elevated
+       pop-up plays that participant's uploads (posts only, no numbers).
+       Arrows: ← → walk the posts, ↑ ↓ walk the participants, Esc closes. -->
+  <div class="pcl-gal" id="pclGallery" hidden>
+    <div class="pcl-gal-scrim" data-gal="close"></div>
+    <div class="pcl-gal-cardbox" role="dialog" aria-modal="true"
+         aria-label="Participant uploads">
+      <button type="button" class="pcl-gal-x" data-gal="close" aria-label="Close">
+        <span class="pcl-px-x" aria-hidden="true"></span>
+      </button>
+      <header class="pcl-gal-head">
+        <span class="pcl-gal-ava" id="galAva" aria-hidden="true"></span>
+        <div class="pcl-gal-id">
+          <h3 class="pcl-gal-name" id="galName"></h3>
+          <p class="pcl-gal-sub" id="galSub"></p>
+        </div>
+        <span class="pcl-gal-count" id="galCount"></span>
+      </header>
+      <div class="pcl-gal-stage" id="galStage"></div>
+      <div class="pcl-gal-strip" id="galStrip" hidden></div>
+      <div class="pcl-gal-rail" id="galRail" aria-label="Participants"></div>
+      <p class="pcl-gal-hint"><b>&#8592; &#8594;</b> this player's posts
+        &nbsp;&middot;&nbsp; <b>&#8593; &#8595;</b> participants
+        &nbsp;&middot;&nbsp; <b>ESC</b> close</p>
+    </div>
+  </div>
+
   <script src="js/gas-endpoint.js?v=20261027c"></script>
-  <script src="js/leaderboard.js"></script>
+  <script src="js/leaderboard.js?v=20261027e"></script>
 </body>
 </html>
