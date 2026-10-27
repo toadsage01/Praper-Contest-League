@@ -14,7 +14,7 @@
        then the ledger reloads so sheet row numbers stay fresh.
      · AUDIT rebuilds per-Media-ID snapshot timelines and flags hard
        claimed-count jumps (WATCH) with one-click BOOST? staging.
-     · REPORTS computes season cards, weekly windows (Mon 11:00 IST
+     · REPORTS computes season cards, weekly windows (Tue 18:00 IST
        deadline) and the per-player table. CSV export is client-side.
 
    Debug/demo: open admin.html?mock=1 → mock ledger, any password ≥ 4 chars
@@ -262,7 +262,7 @@
   }
 
   /* ============================================================================
-     WEEK WINDOWS — season opens Mon 2026-10-19, deadline Mondays 11:00 AM IST
+     WEEK WINDOWS — season opens Mon 2026-10-19, entries lock Tuesdays 6:00 PM IST (+ the Control-Room reopen power)
      ========================================================================== */
   var WEEKS = 10;
   var SEASON_START_ISO = "2026-10-19T11:00:00+05:30";
@@ -294,7 +294,7 @@
   var mockEdits = {};   // sheet row → {ocrCount, crossCheck, verifiedCount}
   var MOCK_VERIFIED = {};  // normName → bool (mock identity verification)
   var MOCK_AWARDS = [];    // mock weekly-challenge rewards (PCL-Awards)
-  var MOCK_GATES = { seasonOpen: true, weeks: {} };   // mock submission gates
+  var MOCK_GATES = { seasonOpen: true, weeks: {}, reopen: {} };   // mock submission gates
 
   function mockSvg(seed, big) {
     // tiny pixel analytics placeholder — deterministic per seed
@@ -466,7 +466,8 @@
           rows: rows,
           awards: MOCK_AWARDS.slice(),
           gates: { seasonOpen: MOCK_GATES.seasonOpen,
-                   weeks: JSON.parse(JSON.stringify(MOCK_GATES.weeks)) },
+                   weeks: JSON.parse(JSON.stringify(MOCK_GATES.weeks)),
+                   reopen: JSON.parse(JSON.stringify(MOCK_GATES.reopen || {})) },
           log: mockLog
         });
       }, 220);
@@ -570,10 +571,16 @@
           }
           if (body.action === "setGate") {
             if (body.scope === "season") MOCK_GATES.seasonOpen = !!body.open;
+            else if (body.scope === "reopen") {
+              MOCK_GATES.reopen = MOCK_GATES.reopen || {};
+              MOCK_GATES.reopen[String(body.week)] = !!body.open;
+            }
             else MOCK_GATES.weeks[String(body.week)] = !!body.open;
             mockLog.unshift({ ts: new Date().toISOString(),
               operator: state.operator || "unnamed", action: "GATE",
-              target: body.scope === "season" ? "season" : "week " + body.week,
+              target: body.scope === "season" ? "season"
+                : (body.scope === "reopen" ? "week " + body.week + " reopen"
+                                           : "week " + body.week),
               detail: body.open ? "OPEN" : "CLOSED" });
             resolve({ ok: true });
             return;
@@ -2081,7 +2088,8 @@
   /* ============================================================================
      SUBMISSION GATES (ROUND 35) — the admins' open/close power, enforced
      server-side at ingest and mirrored onto the entry form at its next
-     page load. state.gates = { seasonOpen, weeks:{1..10} } — absent = open.
+     page load. state.gates = { seasonOpen, weeks:{1..10}, reopen:{1..10},
+     allowedWeeks:[…] } — absent = everything open (old backend).
      ========================================================================== */
   function gateOf(w) {
     var g = state.gates;
@@ -2103,21 +2111,39 @@
       "</div>";
     var cur = serverWeek();
     var rows = "";
+    var past = "";
     for (var w = 1; w <= WEEKS; w++) {
       var open = gateOf(w);
+      var dlPassed = weekDeadlineOf(w) <= Date.now();
+      var reopened = !!(state.gates && state.gates.reopen &&
+                        state.gates.reopen[String(w)]);
+      var stateLab = reopened ? "REOPENED"
+        : (dlPassed ? "PAST" : (open ? "OPEN" : "CLOSED"));
       rows += '<div class="pcl-gate-row' + (open ? " is-open" : " is-closed") +
         (w === cur ? " is-live" : "") + '">' +
         '<span class="pcl-gate-wk">W' + w + (w === cur ? ' <span class="pcl-tag">LIVE</span>' : "") + "</span>" +
         '<span class="pcl-gate-lab2">' + esc(WEEK_THEMES[w] || "") + "</span>" +
-        '<span class="pcl-gate-state">' + (open ? "OPEN" : "CLOSED") + "</span>" +
+        '<span class="pcl-gate-state' + (reopened ? " is-reopened" : "") + '">' + stateLab + "</span>" +
         '<button type="button" class="pcl-abtn pcl-abtn--small' + (open ? "" : " pcl-abtn--accent") +
           '" data-gate="week" data-week="' + w + '" data-open="' + (open ? "0" : "1") + '"' +
           ' title="' + (open ? "Close week " + w + " challenge entries"
-                             : "Reopen week " + w + " challenge entries") + '">' +
+                             : "Open week " + w + " challenge entries") + '">' +
           (open ? "CLOSE" : "OPEN") + "</button>" +
         "</div>";
+      if (dlPassed) {
+        past += '<div class="pcl-gate-row pcl-gate-row--reopen' +
+          (reopened ? " is-open" : " is-closed") + '">' +
+          '<span class="pcl-gate-wk">W' + w + "</span>" +
+          '<span class="pcl-gate-lab2">' + esc(WEEK_THEMES[w] || "") + "</span>" +
+          '<span class="pcl-gate-state">' + (reopened ? "REOPENED" : "PAST DEADLINE") + "</span>" +
+          '<button type="button" class="pcl-abtn pcl-abtn--small' + (reopened ? "" : " pcl-abtn--accent") +
+            '" data-reopen="' + w + '" data-open="' + (reopened ? "0" : "1") + '">' +
+            (reopened ? "WITHDRAW" : "REOPEN") + "</button>" +
+          "</div>";
+      }
     }
-    weeks.innerHTML = rows;
+    weeks.innerHTML = rows +
+      (past ? '<div class="pcl-gates-reopen-h">PAST DEADLINE — REOPEN IF NEEDED</div>' + past : "");
   }
   /* the week number the BACKEND clock says it is — state.rows' timestamps
      use the local clock; the gates panel should match the server's window */
@@ -2128,7 +2154,39 @@
     if (t < start) return 0;
     return Math.min(WEEKS, Math.floor((t - start) / 604800000) + 1);
   }
+  /* ROUND 37 — a week's entries lock at 6:00 PM IST on the Tuesday after its
+     Monday 11:00 close; past that, only the reopen strip can open the week. */
+  var SEASON_START_MS = Date.parse("2026-10-19T11:00:00+05:30");
+  var WEEK_GRACE_MS = 31 * 60 * 60 * 1000;   // Mon 11:00 → Tue 18:00 IST
+  function weekDeadlineOf(w) {
+    if (!isFinite(SEASON_START_MS)) return Infinity;
+    return SEASON_START_MS + w * 604800000 + WEEK_GRACE_MS;
+  }
   $("gatePanel").addEventListener("click", function (ev) {
+    var rbtn = ev.target.closest("[data-reopen]");
+    if (rbtn) {
+      var rw = Number(rbtn.getAttribute("data-reopen"));
+      var ropen = rbtn.getAttribute("data-open") === "1";
+      var rwhat = ropen
+        ? "Open W" + rw + " again past its deadline? That week will accept " +
+          "challenge entries until you withdraw the reopen."
+        : "Withdraw the W" + rw + " reopen? The week locks again immediately.";
+      if (!window.confirm(rwhat)) return;
+      rbtn.disabled = true;
+      gasPost({ action: "setGate", adminKey: state.key, scope: "reopen",
+                week: rw, open: ropen })
+        .then(function (out) {
+          if (!out || out.ok === false) throw new Error((out && out.error) || "Gate write failed");
+          toast("Week " + rw + (ropen ? " REOPENED" : " reopen withdrawn"));
+          if (!state.gates) state.gates = { seasonOpen: true, weeks: {} };
+          state.gates.reopen = state.gates.reopen || {};
+          state.gates.reopen[String(rw)] = ropen;
+          renderGates();
+        })
+        .catch(function (err) { toast(err.message || "Gate write failed", true); })
+        .finally(function () { rbtn.disabled = false; });
+      return;
+    }
     var btn = ev.target.closest("[data-gate]");
     if (!btn) return;
     var scope = btn.getAttribute("data-gate");

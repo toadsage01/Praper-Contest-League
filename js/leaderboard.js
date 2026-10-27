@@ -382,7 +382,7 @@
         "</div>";
     }
     html += '<p class="pcl-rb-note">Analytics are tracked Monday → Saturday. Submit ' +
-      "each week's post analytics by <b>11:00 AM the following Monday</b> to be " +
+      "each week's post analytics by <b>6:00 PM the following Tuesday</b> to be " +
       "considered. The winning post gets featured as a collab on Praper Media's " +
       "official pages.</p>";
     Modal.open(html);

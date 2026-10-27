@@ -95,7 +95,9 @@ var MAX_FILE_MB = 5;                  // mirrors js/gas-endpoint.js
 
 /** Season clock — week windows for the public leaderboard. Week 1 opens at
  *  SEASON_START_ISO (IST); every window is 7 days; posts submitted before
- *  the start (warm-up) count as Week 1; the counter caps at LEAGUE_WEEKS. */
+ *  the start (warm-up) count as Week 1; the counter caps at LEAGUE_WEEKS.
+ *  ROUND 37 — a week's entries lock at 6:00 PM IST the TUESDAY after its
+ *  Monday 11:00 close (see WEEK_GRACE_MS / weekDeadlineMs_). */
 var SEASON_START_ISO = '2026-10-19T11:00:00+05:30';
 var LEAGUE_WEEKS = 10;
 
@@ -328,22 +330,29 @@ function doPostLocked_(e) {
       }
     }
 
-    // ---- SUBMISSION GATES (Control Room switches, ROUND 35) — the admin
+    // ---- SUBMISSION GATES (Control Room switches, ROUND 35/37) — the admin
     // power to hold submissions: whole season, or any single week's
-    // challenge entries. Absent settings = everything open.
+    // challenge entries. Absent settings = everything open. ROUND 37 adds
+    // the deadline clock (Tue 6:00 PM) + the admin reopen power.
     var gates = readSubmitGates_();
     if (!gates.seasonOpen) {
       return json_({ ok: false, error:
-        'Submissions are paused by the league admins right now — they will '
-        + 'reopen the gates soon. Your draft is saved in the form.' });
+        'Submissions are paused right now — your draft is saved in the '
+        + 'form. Please try again a little later.' });
     }
     if (week) {
       var gateWk = wkNumOfLabel_(week);
       if (gateWk && !gates.weeks[String(gateWk)]) {
         return json_({ ok: false, error:
-          'Week ' + gateWk + ' challenge entries are CLOSED by the league '
-          + 'admins. Switch the challenge to \u201cNot entering\u201d to send '
-          + 'regular posts, or wait for the reopen.' });
+          'Week ' + gateWk + ' challenge entries are closed right now. '
+          + 'Switch the challenge to \u201cNot entering\u201d to send regular '
+          + 'posts.' });
+      }
+      if (gateWk && Date.now() >= weekDeadlineMs_(gateWk) &&
+          !gates.reopen[String(gateWk)]) {
+        return json_({ ok: false, error:
+          'The Week ' + gateWk + ' window has closed. Switch the challenge '
+          + 'to \u201cNot entering\u201d to send regular posts.' });
       }
     }
 
@@ -875,6 +884,19 @@ function currentWeek_() {
     ? 0 : weekOfMs_(Date.now());
 }
 
+/** ---------- ROUND 37 — DEFAULT WEEKLY DEADLINE ----------
+ *  A week's challenge entries lock at 6:00 PM IST on the TUESDAY after the
+ *  week's Monday 11:00 frame close — a 31-hour grace so a busy candidate or
+ *  a league-side hiccup never eats an entry. On top of that the admins can
+ *  open any past-deadline week from the Control Room (reopen.week.<n> in
+ *  PCL-Settings; see readSubmitGates_ / setGate_). */
+var WEEK_GRACE_MS = 31 * 60 * 60 * 1000;   // Mon 11:00 → Tue 18:00 IST
+
+/** Absolute lock (ms epoch) for week n's challenge entries. */
+function weekDeadlineMs_(w) {
+  return new Date(SEASON_START_ISO).getTime() + w * WEEK_MS_ + WEEK_GRACE_MS;
+}
+
 /** One read pass over the ledger → rows as objects + totals + players +
  *  per-week public roll-ups for the leaderboard. */
 function collect_() {
@@ -1329,13 +1351,16 @@ function wkNumOfLabel_(label) {
   return m ? Number(m[1]) : 0;
 }
 
-/** ---------- SUBMISSION GATES (Control Room power, ROUND 35) ----------
+/** ---------- SUBMISSION GATES (Control Room power, ROUND 35/37) ----------
  *  The admins can close the whole season or any single week's challenge
- *  entries without touching code. Settings live in a tiny PCL-Settings tab
+ *  entries without touching code, and (ROUND 37) open a week whose default
+ *  deadline has already passed. Settings live in a tiny PCL-Settings tab
  *  (Key/Value) so they stay visible and editable by hand; absent rows mean
  *  OPEN — the season clock stays the only gate by default.
- *    gate.seasonOpen  = '0'  → EVERY submission refused
- *    gate.week.<n>    = '0'  → challenge-tagged posts for week n refused
+ *    gate.seasonOpen   = '0'  → EVERY submission refused
+ *    gate.week.<n>     = '0'  → challenge-tagged posts for week n refused
+ *    reopen.week.<n>   = '1'  → week n accepts entries past its Tuesday
+ *                               6:00 PM lock (a closed gate still wins)
  *  Regular ("Not entering") posts only answer to the season switch. */
 var GATES_SHEET = 'PCL-Settings';
 
@@ -1350,11 +1375,12 @@ function getGatesSheet_() {
   return sh;
 }
 
-/** Read pass → { seasonOpen: bool, weeks: {1..10: bool}, raw: {...} }.
- *  Any missing/blank key = open. Anything non-'0' also reads open, so a
- *  typo can never lock the league out by accident. */
+/** Read pass → { seasonOpen: bool, weeks: {1..10: bool}, reopen: {1..10: bool},
+ *  raw: {...} }. Any missing/blank key = open (reopen = off). Anything
+ *  non-'0' also reads open, so a typo can never lock the league out by
+ *  accident; a reopen reads ON only for an exact '1'. */
 function readSubmitGates_() {
-  var out = { seasonOpen: true, weeks: {}, raw: {} };
+  var out = { seasonOpen: true, weeks: {}, reopen: {}, raw: {} };
   for (var w = 1; w <= LEAGUE_WEEKS; w++) out.weeks[String(w)] = true;
   try {
     var sh = getGatesSheet_();
@@ -1371,6 +1397,11 @@ function readSubmitGates_() {
       if (mw) {
         var n = Number(mw[1]);
         if (n >= 1 && n <= LEAGUE_WEEKS) out.weeks[String(n)] = v !== '0';
+      }
+      var rw = k.match(/^reopen\.week\.(\d+)$/);
+      if (rw) {
+        var rn = Number(rw[1]);
+        if (rn >= 1 && rn <= LEAGUE_WEEKS) out.reopen[String(rn)] = v === '1';
       }
     });
   } catch (ignore) { /* settings tab absent → everything open */ }
@@ -1394,7 +1425,7 @@ function writeGate_(key, open, operator) {
   }
 }
 
-/** Admin POST action — {action:'setGate', adminKey, scope:'season'|'week',
+/** Admin POST action — {action:'setGate', adminKey, scope:'season'|'week'|'reopen',
  *  week:<n>, open:<bool>} → writes the settings row + AdminLog. */
 function setGate_(payload) {
   var err = checkAdmin_(payload.adminKey);
@@ -1418,6 +1449,17 @@ function setGate_(payload) {
                              'WEEK ' + n + ' ENTRIES CLOSED');
     return json_({ ok: true, scope: 'week', week: n, open: !!payload.open });
   }
+  if (scope === 'reopen') {
+    var r = Number(payload.week);
+    if (!(r >= 1 && r <= LEAGUE_WEEKS)) {
+      return json_({ ok: false, error: 'Week must be 1-' + LEAGUE_WEEKS });
+    }
+    writeGate_('reopen.week.' + r, !!payload.open, operator);
+    logAdmin_(operator, 'GATE', 'week ' + r + ' reopen',
+              payload.open ? 'WEEK ' + r + ' OPENED PAST DEADLINE' :
+                             'WEEK ' + r + ' REOPEN WITHDRAWN');
+    return json_({ ok: true, scope: 'reopen', week: r, open: !!payload.open });
+  }
   return json_({ ok: false, error: 'Unknown gate scope.' });
 }
 
@@ -1425,7 +1467,17 @@ function setGate_(payload) {
  *  no settings internals. */
 function publicGates_() {
   var g = readSubmitGates_();
-  return { seasonOpen: g.seasonOpen, weeks: g.weeks };
+  var now = Date.now();
+  var allowed = [];
+  if (g.seasonOpen) {
+    for (var w = 1; w <= LEAGUE_WEEKS; w++) {
+      if (w > Math.max(1, currentWeek_())) continue;   // window not started yet
+      if (!g.weeks[String(w)]) continue;               // closed by the switch
+      if (now < weekDeadlineMs_(w) || g.reopen[String(w)]) allowed.push(w);
+    }
+  }
+  return { seasonOpen: g.seasonOpen, weeks: g.weeks,
+           reopen: g.reopen, allowedWeeks: allowed };
 }
 
 /** Comparison form of a player's name — whitespace/case tolerant so

@@ -48,7 +48,7 @@ a change between them:
 | Submit forwarding + employee-domain gate (Vercel path) | `api/submit.js` | push main (Vercel) |
 | The same gate on the Docker portal | `server.js` (PCL repo) — mirrors the contract | rebuild PCL |
 | Docker / Terraform / internal hosting | PCL repo: `Dockerfile`, `docker-compose.yml`, `terraform/`, `server.js`, `INTERNAL-HOSTING.md` | rebuild |
-| Open/close submissions (season or per week) | Control Room → REPORTS tab → **Submissions — Open / Close** (stored in the `PCL-Settings` tab of the Sheet; no deploy needed) | nothing — live instantly |
+| Open/close submissions (season or per week) + reopen a past-deadline week | Control Room → REPORTS tab → **Submissions — Open / Close** (stored in the `PCL-Settings` tab of the Sheet: `gate.*` + `reopen.week.<n>` keys; no deploy needed). Weeks default-lock Tuesday 6:00 PM IST; the reopen strip lists every past-lock week | nothing — live instantly |
 | Fix crossed Media IDs (dup dedup keys) | Control Room → AUDIT tab → **Data Tools → REPAIR MEDIA IDS** (or run `repairLedgerMediaIds()` once from the Apps Script editor) | nothing — writes the Sheet + AdminLog |
 | A player's full profile (stats/uploads/metrics) | Control Room → PLAYERS tab → click any participant card | push main + rebuild PCL |
 | Director screening another week | Screening Room → week strip (W1..Wn with entry counts) under the tabs | push main + rebuild PCL **and** paste Code.gs if backend changed |
@@ -125,7 +125,7 @@ each `name:` as is — the name is what gets stamped on audit entries) → save 
 
 | Feature | Where it lives |
 |---|---|
-| Submission gates (admin open/close per week + season) | Backend: `gas/Code.gs` → `readSubmitGates_` / `setGate_` / the gate check inside `doPostLocked_` · Settings tab: **PCL-Settings** (Key/Value; absent = open) · Console UI: `admin.html` `#gatePanel` + `renderGates()` in `js/admin.js` · Form UI: `buildWeekOptions()` + `weekClosed_()` + the `#pclGateNote` banner in `js/app.js` |
+| Submission gates + deadline + reopen (admin open/close per week + season, Tue 6:00 PM default lock, reopen past-deadline weeks) | Backend: `gas/Code.gs` → `readSubmitGates_` / `setGate_` (scopes season/week/reopen) / `weekDeadlineMs_` / `publicGates_.allowedWeeks` / the gate + deadline checks inside `doPostLocked_` · Settings tab: **PCL-Settings** (Key/Value; absent = open, `reopen.week.<n>` = '1') · Console UI: `admin.html` `#gatePanel` + `renderGates()` + the reopen strip in `js/admin.js` · Form UI: `buildWeekOptions()` + `acceptableWeeks()` + `weekClosed_()` + the `#pclGateNote` banner in `js/app.js` |
 | Canonical Media IDs (LinkedIn li / li_p fix) | Extractor twins: `mediaId_()` in `gas/Code.gs` + `classifyUrl()` LinkedIn branch in `js/app.js` — same priority: urn → activity number → posts-slug re-scan → pulse/lnkd · Junk-tail guard: `degenerateMediaId_()` · One-click cleanup: `repairRun_` / `repairMediaIds_` / `repairLedgerMediaIds` in Code.gs + the AUDIT-tab button |
 | Weekly tabs = challenge uploads only | Roll-up weekly bucket in `collect_()` (Code.gs): a post buckets into a W tab ONLY when its `Weekly Challenge` cell is tagged "Week N — …"; the tag's week decides the tab, regular posts stay Season-only |
 | ALL-SEASON → SEASON 2 | `leaderboard.js` `buildWeekChips()` first chip · it still counts EVERYTHING (challenges + regular) |
@@ -157,7 +157,7 @@ AUDIT-tab repair once — it rewrites the whole ledger to canonical ids.
 | Board/admin/director all empty but the Sheet has data | The `PCL-Data` tab was renamed or shadowed by an empty copy — rename the data tab back to exactly `PCL-Data`. Since the 2026-10-26 fix, `getSheet_()` self-heals: it re-adopts a data-bearing near-name tab (`PCL Data`, `Copy of PCL-Data`, …), logs `LEDGER-TAB-ADOPTED` in AdminLog, and on truly-missing tabs reads fail LOUDLY instead of showing fake zeros |
 | Two players "share" a post they didn't both submit | Crossed Media ID — run AUDIT → REPAIR MEDIA IDS once; the ingest can't produce those ids anymore |
 | Director's room says nothing to review | Default tab = CURRENT week's challenge entries only — use the week strip; ALL CONTENTS always plays the whole season |
-| Players can't submit a challenge entry | Check REPORTS → Submissions panel (a week/season switch may be CLOSED) and the `PCL-Settings` tab in the Sheet |
+| Players can't submit a challenge entry | Check REPORTS → Submissions panel (a week/season switch may be CLOSED, or the week's Tuesday 6:00 PM lock passed — reopen it from the strip) and the `PCL-Settings` tab in the Sheet |
 
 ## 6 · Tests — your safety net before every push
 

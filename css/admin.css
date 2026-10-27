@@ -1090,6 +1090,13 @@ html[data-pcl-theme="dark"] .pcl-award input {
 }
 .pcl-gate-row.is-closed { border-left-color: var(--pcl-primary, #ed3b00); }
 .pcl-gate-row.is-live { background: var(--pcl-surface-3, #f1ead8); }
+.pcl-gate-row--reopen { border-left-color: #b3681c; }
+.pcl-gate-row--reopen.is-open { border-left-color: #1d9e57; }
+.pcl-gate-row .pcl-gate-state.is-reopened { color: #1d9e57; }
+.pcl-gates-reopen-h {
+  margin-top: 10px; font-family: var(--pcl-font-title, inherit); font-weight: 700;
+  font-size: 10.5px; letter-spacing: 1.4px; color: var(--pcl-muted, #6b675c);
+}
 .pcl-gate-wk {
   font-family: var(--pcl-font-title, inherit); font-weight: 700;
   font-size: 12px; letter-spacing: 1px; min-width: 52px;

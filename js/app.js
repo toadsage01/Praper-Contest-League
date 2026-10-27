@@ -1956,11 +1956,38 @@
     var m = String(label || "").match(/^Week\s+(\d+)\b/i);
     return m ? Number(m[1]) : 0;
   }
-  /* the ONLY selectable challenge = the week that is live right now.
-     ROUND 35 — the Control Room can CLOSE it: the option stays visible but
-     reads "— CLOSED" and is disabled, so nobody picks a gate that will
-     bounce. Regular ("Not entering") posts stay open unless the admins
-     pause the whole season (banner, below). */
+  /* ROUND 37 — default weekly deadline: entries lock at 6:00 PM IST on the
+     TUESDAY after the week's Monday 11:00 close (31-hour grace). The league
+     can also open a past-deadline week from the Control Room; both facts
+     reach this form as data (allowedWeeks) and render WITHOUT any admin
+     wording — a reopened week is just a selectable week. */
+  var WEEK_GRACE_MS = 31 * 60 * 60 * 1000;   // Mon 11:00 → Tue 18:00 IST
+  function weekDeadlineOf(w) {
+    return new Date(SEASON_START + w * 604800000 + WEEK_GRACE_MS);
+  }
+  function fmtDeadline(d) {
+    var D = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    var h = d.getHours(), mi = d.getMinutes();
+    var h12 = h % 12; if (h12 === 0) h12 = 12;
+    return D[d.getDay()] + " " + fmtDayShort(d) + " · " + h12 + ":" +
+      (mi < 10 ? "0" + mi : mi) + " " + (h < 12 ? "AM" : "PM");
+  }
+  /* which weeks can be entered right now — the backend's allowedWeeks
+     (gates + deadline clock + reopens) is the single source of truth;
+     the legacy fallback offers the live week only. */
+  function acceptableWeeks() {
+    if (submitGates && Array.isArray(submitGates.allowedWeeks)) {
+      return submitGates.allowedWeeks.slice()
+        .sort(function (a, b) { return a - b; });
+    }
+    return [currentWeek()];
+  }
+  /* the selectable challenges: every week that is open right now — the live
+     week, a grace-window week, or a past week the league opened again —
+     each rendered as a plain option with nothing beyond its name.
+     ROUND 35 — a Control-Room-closed week stays visible but reads "— CLOSED"
+     and is disabled, so nobody picks a gate that will bounce. Regular
+     ("Not entering") posts stay open unless the season itself is paused. */
   function weekClosed_(w) {
     if (!submitGates) return false;
     if (!submitGates.seasonOpen) return true;
@@ -1968,19 +1995,29 @@
   }
   function buildWeekOptions() {
     var cur = currentWeek();
-    var c = CHALLENGES[cur - 1];
     var seasonClosed = submitGates && !submitGates.seasonOpen;
-    var closed = weekClosed_(cur);
-    week.innerHTML = '<option value="">Not entering</option>' +
-      '<option value="Week ' + cur + " — " + esc(c.name) + '"' +
-      (closed ? ' disabled' : "") + ">Week " + cur +
-      " · " + esc(c.name) + (closed ? " — CLOSED BY ADMINS" : "") +
-      "</option>";
+    var list = acceptableWeeks();
+    var curClosed = weekClosed_(cur);
+    if (list.indexOf(cur) === -1 && curClosed) list.push(cur);   // keep the closed live week visible (disabled)
+    list.sort(function (a, b) { return a - b; });
+    var opts = '<option value="">Not entering</option>';
+    list.forEach(function (w) {
+      var c = CHALLENGES[w - 1];
+      if (!c) return;
+      var closed = weekClosed_(w);
+      opts += '<option value="Week ' + w + " — " + esc(c.name) + '"' +
+        (closed ? ' disabled' : "") + ">Week " + w +
+        " · " + esc(c.name) + (closed ? " — CLOSED" : "") +
+        "</option>";
+    });
+    week.innerHTML = opts;
     /* the gate note — one line under the select, only when something is
-       actually closed; never rendered while everything is open */
+       actually closed or nothing is enterable; wording stays neutral by
+       design — no admin internals on participant surfaces */
     var field = week.closest(".pcl-field");
     var note = document.getElementById("pclGateNote");
-    if ((seasonClosed || closed) && field) {
+    var noneOpen = !list.some(function (w) { return !weekClosed_(w); });
+    if ((seasonClosed || curClosed || noneOpen) && field) {
       if (!note) {
         note = document.createElement("p");
         note.id = "pclGateNote";
@@ -1988,10 +2025,13 @@
         field.appendChild(note);
       }
       note.textContent = seasonClosed
-        ? "Submissions are paused by the league admins — regular posts " +
-          "can't be sent either until they reopen the gates."
-        : "Week " + cur + " challenge entries are closed by the league " +
-          "admins — switch to \u201cNot entering\u201d to send regular posts.";
+        ? "Submissions are paused right now — your draft stays saved in the " +
+          "form. Please try again a little later."
+        : noneOpen
+          ? "Weekly challenge entries are closed right now — regular " +
+            "(\u201cNot entering\u201d) posts still go through."
+          : "Week " + cur + " challenge entries are closed right now — " +
+            "switch to \u201cNot entering\u201d to send regular posts.";
       note.hidden = false;
     } else if (note) {
       note.hidden = true;
@@ -2026,11 +2066,13 @@
     var c = CHALLENGES[w - 1];
     var win = weekWindow(w);
     var tag = live ? '<span class="pcl-wk-tag">LIVE</span>'
-                   : (w < currentWeek() ? '<span class="pcl-wk-tag pcl-wk-tag--past">CLOSED</span>' : "");
+      : (w < currentWeek() && acceptableWeeks().indexOf(w) === -1
+        ? '<span class="pcl-wk-tag pcl-wk-tag--past">CLOSED</span>' : "");
     return '<div class="pcl-wkcard' + (live ? " is-live" : "") + '">' +
       '<div class="pcl-wk-head">' +
         '<span class="pcl-wk-name">WEEK ' + w + " · " + esc(c.name) + "</span>" + tag +
-        '<span class="pcl-wk-date">' + fmtDayShort(win.a) + " → " + fmtDayShort(win.b) + "</span>" +
+        '<span class="pcl-wk-date">' + fmtDayShort(win.a) + " → " +
+          fmtDayShort(weekDeadlineOf(w)) + "</span>" +
       "</div>" +
       '<p class="pcl-wk-crit">' + esc(c.crit) + "</p>" +
       '<p class="pcl-wk-pts">Weekly Reward + ' + c.pts.toLocaleString("en-IN") +
@@ -2040,15 +2082,19 @@
 
   function openWeekInfo() {
     var cur = currentWeek();
+    var others = acceptableWeeks().filter(function (w) { return w !== cur; });
     var html = '<h3 class="pcl-modal-title">WEEKLY CHALLENGES</h3>' +
       '<p class="pcl-modal-sub">Season 2 · 10 weeks · a new challenge every Monday</p>' +
-      '<p class="pcl-rb-p">Only the week that is live right now can be entered — ' +
-      "this form accepts <b>Week " + cur + "</b> until " +
-      fmtDayShort(weekWindow(cur).b) + ". Upcoming challenges are listed below so " +
-      "you can plan and shoot ahead.</p>";
+      '<p class="pcl-rb-p">This form accepts <b>Week ' + cur + "</b> until <b>" +
+      fmtDeadline(weekDeadlineOf(cur)) + "</b> — every week locks at 6:00 PM " +
+      "on the Tuesday after its Monday close" +
+      (others.length
+        ? ". Also open right now: <b>Week " + others.join("</b>, <b>Week ") + "</b>"
+        : "") +
+      ". Upcoming challenges are listed below so you can plan and shoot ahead.</p>";
     for (var w = 1; w <= WEEK_TOTAL; w++) html += weekCardHtml(w, w === cur);
     html += '<p class="pcl-rb-note">Analytics are tracked Monday → Saturday. Submit ' +
-      "each week's post analytics by <b>11:00 AM the following Monday</b> to be " +
+      "each week's post analytics by <b>6:00 PM the following Tuesday</b> to be " +
       "considered. The winning post gets featured as a collab on Praper Media's " +
       "official pages.</p>";
     Modal.open(html);
@@ -2108,7 +2154,7 @@
       '<table class="pcl-rb-table"><thead><tr><th>Wk</th><th>Challenge</th>' +
       "<th>Criteria</th><th>Reward</th></tr></thead><tbody>" + rows + "</tbody></table>" +
       '<p class="pcl-rb-note">Impressions and analytics are tracked Monday → Saturday ' +
-      "each week. Submit post analytics by <b>11:00 AM the following Monday</b>. The " +
+      "each week. Submit post analytics by <b>6:00 PM the following Tuesday</b>. The " +
       "winning post of each weekly challenge is featured as a collaborative post with " +
       "Praper Media's official pages.</p>" +
       '<p class="pcl-rb-p"><b>How weekly challenges are judged — and how they relate ' +
@@ -3437,10 +3483,10 @@
        than the select's options (admins closed a week mid-session). The
        ingest re-checks server-side either way. */
     if (submitGates && !submitGates.seasonOpen) {
-      bad("postLinks", "Submissions paused by admins");
+      bad("postLinks", "Submissions are paused right now");
     }
     if (week.value && weekClosed_(wkNumOf_(week.value))) {
-      bad("challengeWeek", "Closed by admins");
+      bad("challengeWeek", "Entries closed right now");
     }
     if (!photoShown && !photoState.file) {
       bad("playerPhoto", "Upload your photo.");
