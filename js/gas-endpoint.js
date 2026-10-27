@@ -7,7 +7,7 @@ window.PCL_CONFIG = {
   // Paste your deployed Google Apps Script Web App URL here (ends with /exec).
   // Leave "" to run in LOCAL mode: submissions are logged to the browser
   // console + localStorage so you can demo the form without any backend.
-  gasWebAppUrl: "https://script.google.com/macros/s/AKfycbxdY0N312upmv3VgfmG2DiVrlHdGGylv7jUk6Psa42Yp1NJotKURlJOoVpiKtly5iwe/exec",
+  gasWebAppUrl: "https://script.google.com/macros/s/AKfycbze-8FeQeqUXpUH34nEjK2nDwpKEITVjPgszBoNtTrmr6G4bwUaqnYapqP6SeTz85MhOg/exec",
 
   // Set true on a Vercel deployment: submissions POST to /api/submit and the
   // serverless function forwards them to Google Apps Script using the
