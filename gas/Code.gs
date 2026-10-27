@@ -86,7 +86,7 @@
  */
 
 /** ---------- CONFIG ---------- */
-var SHEET_ID = '1IMgfcg6nv_PM1Ntw3KmrIZDrldueIjteT6Mx_RteAFE';                    // '' = bound/new spreadsheet
+var SHEET_ID = '1TbMgE75aGkwihEEfH3icDrlPgRsBNpxb8jUv8rpJINA';                    // '' = bound/new spreadsheet
 var SHEET_NAME = 'PCL-Data';
 var DRIVE_FOLDER_NAME = 'Praper Contest League Uploads';
 var PHOTO_FOLDER_NAME = 'PCL Player Photos';   // child of the uploads folder —
