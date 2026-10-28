@@ -97,31 +97,47 @@
     syncing: false
   };
 
-  /* ---------- transport: JSONP (cross-origin, zero config) ---------- */
+  /* ---------- transport: JSONP (cross-origin, zero config) ----------
+     ROUND 38 FIX — always returns a Promise AND keeps the classic
+     callback contract: the gallery fetch chain calls this promise-style
+     (jsonp({action:"gallery"}).then), which previously threw
+     "undefined.then" on every board load and the theatre could never
+     open on live. The response also guarded cb, so each fetch fired a
+     second "cb is not a function" pageerror. Both are gone: the promise
+     resolves for .then users, cb (when passed) still fires first. */
   var jsonpSeq = 0;
   function jsonp(params, cb) {
     var name = "pclBoardCb" + (++jsonpSeq) + "_" + Date.now();
     var s = document.createElement("script");
-    var timer = setTimeout(function () {
-      cleanup();
-      cb(new Error("timeout"));
-    }, 60000);
-    function cleanup() {
-      clearTimeout(timer);
-      delete window[name];
-      if (s.parentNode) s.parentNode.removeChild(s);
-    }
-    window[name] = function (data) {
-      cleanup();
-      cb(null, data);
-    };
-    params.callback = name;
-    params._ = Date.now();   // cache-buster — /exec GETs are CDN-cached
-    var qs = Object.keys(params).map(function (k) {
-      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
-    }).join("&");
-    s.src = cfg.gasWebAppUrl + "?" + qs;
-    document.head.appendChild(s);
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        cleanup();
+        if (typeof cb === "function") cb(new Error("timeout"));
+        reject(new Error("jsonp timeout"));
+      }, 60000);
+      function cleanup() {
+        clearTimeout(timer);
+        delete window[name];
+        if (s.parentNode) s.parentNode.removeChild(s);
+      }
+      window[name] = function (data) {
+        cleanup();
+        if (typeof cb === "function") cb(null, data);
+        resolve(data);
+      };
+      s.onerror = function () {
+        cleanup();
+        if (typeof cb === "function") cb(new Error("network"));
+        reject(new Error("jsonp network error"));
+      };
+      params.callback = name;
+      params._ = Date.now();   // cache-buster — /exec GETs are CDN-cached
+      var qs = Object.keys(params).map(function (k) {
+        return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+      }).join("&");
+      s.src = cfg.gasWebAppUrl + "?" + qs;
+      document.head.appendChild(s);
+    });
   }
 
   /* ============================================================================
