@@ -1064,6 +1064,9 @@
           '<span class="pcl-fr-fmt">' + brandBadgeAdm(r.format) + " <b>" + esc(multOf(r.mult)) +
             '</b> <span class="pcl-fr-id">· ' + esc(postHashOf(r)) + "</span>" +
             (r.weekNum ? ' <span class="pcl-fr-id">· W' + r.weekNum + "</span>" : "") +
+            (r.chalEntry === "YES"
+              ? ' <span class="pcl-chalchip" title="This row IS the week\u2019s challenge submission (its link matches the Q4 challenge link)">CHALLENGE</span>'
+              : "") +
           "</span>" +
         "</span>" +
       "</span>" +
@@ -2418,16 +2421,28 @@
     });
     return Object.keys(map).map(function (k) { return map[k]; });
   }
+  /* ROUND 39 — the ledger's Format column carries LABELS ("Instagram Reel"),
+     not the ig_/yt_/li_ enums the first cut matched against — so every
+     per-app bucket stayed at 0 forever. Classify by label OR URL instead,
+     and let the platform-tracked count (PCL-Snapshots / YT lift) win when
+     it is higher, exactly like the leaderboard does. */
+  function famOfRow(r) {
+    var hay = (String(r.format || "") + " " + String(r.url || "")).toLowerCase();
+    if (/(^|[^a-z])ig_|instagram|instagr\.am/.test(hay)) return "ig";
+    if (/(^|[^a-z])yt_|youtube|youtu\.be/.test(hay)) return "yt";
+    if (/(^|[^a-z])li_|linkedin|lnkd\.in/.test(hay)) return "li";
+    return "";
+  }
   function profileMetrics(rows) {
     var per = { ig: { posts: 0, views: 0 }, yt: { posts: 0, views: 0 }, li: { posts: 0, views: 0 } };
     var best = null;
     latestByMedia(rows).forEach(function (r) {
-      var fam = String(r.format || "").indexOf("ig_") === 0 ? "ig"
-        : String(r.format || "").indexOf("yt_") === 0 ? "yt"
-        : String(r.format || "") === "li_post" ? "li" : "";
+      var fam = famOfRow(r);
       var d = displayOf(r);
       var views = d.verified !== "" ? Number(d.verified) || 0
         : (Number(r.claimed) || 0);
+      var tracked = Number(r.trackedViews);
+      if (r.tracked && !isNaN(tracked) && tracked > views) views = tracked;
       if (fam && per[fam]) { per[fam].posts++; per[fam].views += views; }
       var pts = Number(r.projected) || 0;
       if (!best || pts > best.pts) best = { url: r.url, format: r.format, pts: pts, views: views };
@@ -2445,7 +2460,8 @@
       '<td>' + brandBadgeAdm(r.format) + " " + esc(fmtShort(r.format)) + "</td>" +
       '<td class="num">' + views + "</td>" +
       '<td class="num">' + fmt(r.projected) + "</td>" +
-      "<td>" + (r.week ? esc(r.week.split("—")[0].trim()) : '<span class="pcl-muted-cell">—</span>') + "</td>" +
+      "<td>" + (r.week ? esc(r.week.split("—")[0].trim()) : '<span class="pcl-muted-cell">—</span>') +
+        (r.chalEntry === "YES" ? ' <span class="pcl-chalchip">CHALLENGE</span>' : "") + "</td>" +
       "<td>" + (r.collabStatus === "CONFIRMED" ? "COLLAB" :
                 (r.collabWith ? "invited" : '<span class="pcl-muted-cell">—</span>')) + "</td>" +
       "<td>" + stat + "</td>" +
@@ -2457,9 +2473,6 @@
   function playerProfileHtml(a, rows) {
     var ident = pmapOf(a.name) || {};
     var m = profileMetrics(rows);
-    var rank = playerAgg().findIndex(function (x) {
-      return String(x.name).toLowerCase() === String(a.name).toLowerCase();
-    }) + 1;
     var ava = a.photoData || a.photoId
       ? '<img class="pcl-prof-ava" src="' + esc(a.photoData ||
           ("https://drive.google.com/thumbnail?id=" + encodeURIComponent(a.photoId) + "&sz=w200")) +
@@ -2490,7 +2503,6 @@
             (ident.designation ? esc(ident.designation) + " · " : "") +
             "mgr " + esc(a.manager || "–") +
             (email ? " · " + esc(email) : "") +
-            (rank ? ' · <b>#' + rank + "</b> on the board" : "") +
           "</p>" +
           (bal ? '<p class="pcl-pbal">' + bal + "</p>" : "") +
         "</div>" +
@@ -2500,7 +2512,10 @@
         pstat("VERIFIED", a.vpts ? fmt(a.vpts) : "–") +
         pstat("PROJECTED", fmt(a.ppts)) +
         pstat("VIEWS", fmt(a.views)) +
-        pstat("POSTS", a.uniqueMedia) +
+        /* ROUND 39 — POSTS now matches the table right below it (one row
+           per distinct upload, latest snapshot): the old uniqueMedia count
+           under-counted when a Media ID could not be derived (short links). */
+        pstat("POSTS", latestRows.length) +
         pstat("APPS", a.apps) +
       "</div>" +
       '<div class="pcl-prof-apps">' +

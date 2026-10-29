@@ -187,13 +187,21 @@ var HEADERS = [
   'Screenshot File', 'Screenshot Link',
   'Challenge URL', 'Notes',
   'Submission ID', 'Snapshot #', 'Raw JSON',
-  'Player Email'
+  'Player Email', 'Challenge Entry'
 ];
 /* 'Player Email' (col 30, appended last so no existing reader shifts) — the
  * participant's work email from their sign-in session, carried on every row
  * they own. Powers the EMAIL collab flow: partners are invited by email,
  * the accept banner shows ONLY to the invited mail, and the ingest pairs
  * rows by email (legacy name matching still honoured for old rows). */
+
+/* 'Challenge Entry' (col 31, appended last — same shift-free rule) — 'YES'
+ * marks THE row that IS a week's challenge submission (its Media ID equals
+ * the submission's Q4 challenge link). Week-tagged rows WITHOUT the mark
+ * are ordinary posts made during that window; the Screening Room's ENTRIES
+ * tab lists marked rows + link-only challenge entries (Q4 link that never
+ * rode a Post URL). finishLedgerSheet_ appends the header to an existing
+ * sheet automatically; maybeBackfillChallengeEntries_ stamps history once. */
 
 /** Player identity (per PLAYER, not per post — the same value repeats on
  *  every row the player owns):
@@ -364,6 +372,34 @@ function doPostLocked_(e) {
     // media/URL ownership, snapshot counters and the retried-submission guard
     var index = ledgerIndex_(sheet);
 
+    // ROUND 39 — the challenge link is content too. Key it once, refuse it
+    // when another player already posted it (same rule as a section-2 link),
+    // and remember the key for the write pass so THE challenge row gets the
+    // 'Challenge Entry' mark (the week tag alone rides every post of the
+    // submission — the mark singles out the actual challenge upload).
+    var chalKey = '';
+    if (week && challengeUrl) {
+      chalKey = challengeMediaId_(challengeUrl) || urlKey_(challengeUrl);
+      if (chalKey) {
+        var chalOthers = (index.byKey[chalKey] || []).filter(function (r) {
+          if (normName_(r.name) === who) return false;
+          if (myEmail && r.playerEmail && r.playerEmail === myEmail) return false;
+          // a collab invitation aimed at this player is not a theft
+          if (myEmail && chipEmails_(r.collabWith).indexOf(myEmail) >= 0) return false;
+          if (who && normName_(r.collabWith) === who) return false;
+          return true;
+        });
+        if (chalOthers.length) {
+          return json_({ ok: false, error:
+            'The challenge link was already uploaded by ' +
+            (chalOthers[0].name ? firstName_(chalOthers[0].name)
+                                : 'another player') +
+            '. The weekly challenge must be your own content — pick the '
+            + 'post only you made.' });
+        }
+      }
+    }
+
     // designation fallback — reuse what's already on file for this player
     if (!designation && index.desigByName[who]) designation = index.desigByName[who];
 
@@ -510,6 +546,12 @@ function doPostLocked_(e) {
       row['Media ID'] = b.mediaId;
       row['Weekly Challenge'] = cellSafe_(week);
       row['Challenge URL'] = cellSafe_(challengeUrl);
+      // ROUND 39 — mark THE row that IS the challenge upload: the batch post
+      // whose Media ID equals the Q4 challenge link. Everything else keeps
+      // only the week tag (it rode a challenge submission, it is not the
+      // challenge). '' when no week was entered — plain regular posts.
+      row['Challenge Entry'] =
+        (chalKey && (b.mediaId || urlKey_(b.postUrl)) === chalKey) ? 'YES' : '';
       row['Notes'] = cellSafe_(notes);
       row['Claimed Views/Impressions'] = b.claimed;
       row['Projected Points'] = b.projected;
@@ -557,6 +599,31 @@ function doPostLocked_(e) {
         });
       }
     });
+
+    // ROUND 39 — the challenge link matched NO row of this submission (the
+    // player pasted it only in Q4), but it matches one of their PRIOR rows:
+    // the classic "regular post last week, challenge entry this week" case.
+    // Stamp the newest matching prior row so the Screening Room's ENTRIES
+    // tab still shows the real content. Never touches other players' rows.
+    if (chalKey && week) {
+      var chalMarked = batch.some(function (b) {
+        return (b.mediaId || urlKey_(b.postUrl)) === chalKey;
+      });
+      if (!chalMarked) {
+        var chalPrior = (index.byKey[chalKey] || []).filter(function (r) {
+          return normName_(r.name) === who ||
+            (!!myEmail && !!r.playerEmail && r.playerEmail === myEmail);
+        }).sort(function (a, b2) { return b2.row - a.row; })[0];
+        if (chalPrior) {
+          sheet.getRange(chalPrior.row, HEADERS.indexOf('Challenge Entry') + 1)
+            .setValue('YES');
+          logAdmin_(operatorOf_(payload) || fullName,
+            'MARK', 'challenge-entry',
+            'row ' + chalPrior.row + ' → ' + week + ' (Q4 link matched a ' +
+            'prior upload; new rows rode unmarked)');
+        }
+      }
+    }
 
     return json_({ ok: true, id: id, posts: written });
   } catch (err) {
@@ -770,9 +837,21 @@ function checklinkEndpoint_(p) {
     }
   });
   // the asker's OWN rows always win — their resubmission is a view-count
-  // UPDATE and the collab state is already on file, so no banner is needed
+  // UPDATE and the collab state is already on file, so no banner is needed.
+  // ROUND 39: the answer also carries WHERE the content already lives
+  // (newest own row's URL + timestamp) so the challenge section can show
+  // "you already submitted this content" with the link visible.
   if (mine) {
-    return reply_(p, { ok: true, checkable: true, taken: false, mine: true });
+    var mineRows = rows.filter(function (r) {
+      return (who && normName_(r.name) === who) ||
+             (myEmail && r.playerEmail && r.playerEmail === myEmail);
+    }).sort(function (a, b) {
+      return String(b.ts || '').localeCompare(String(a.ts || ''));
+    });
+    var lastMine = mineRows[0] || null;
+    return reply_(p, { ok: true, checkable: true, taken: false, mine: true,
+                       mineUrl: lastMine ? lastMine.url : '',
+                       mineTs: lastMine ? lastMine.ts : '' });
   }
   // a collab tag aimed at THIS player beats a plain "taken" — the whole
   // point of the feature: one tap to accept and both sides score
@@ -1007,6 +1086,8 @@ function collect_() {
         url: str_(r[c['Post URL']]),
         mediaId: str_(mid),
         week: str_(r[c['Weekly Challenge']]),
+        chalEntry: c['Challenge Entry'] !== undefined
+          ? str_(r[c['Challenge Entry']]) : '',
         challengeUrl: str_(r[c['Challenge URL']]),
         claimed: r[c['Claimed Views/Impressions']],
         projected: r[c['Projected Points']],
@@ -1287,6 +1368,42 @@ function mediaId_(url, fmt) {
   return '';
 }
 
+/** Format-free Media ID for the Q4 CHALLENGE LINK. The challenge section
+ *  collects a link without a format selector, so the ingest cannot take the
+ *  mediaId_(url, fmt) path — this sniffs every extractor instead. The ID
+ *  itself never depends on WHICH sub-format was guessed (ig_reel and ig_post
+ *  both extract ig_<code>, both YT shapes extract yt_<id>), so trying them
+ *  in order is exact, not heuristic. '' when nothing matches — callers then
+ *  fall back to urlKey_ so an exotic link still dedupes by normalized URL. */
+function challengeMediaId_(url) {
+  url = String(url || '');
+  var m;
+  m = url.match(/(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv)\/([\w-]+)/i);
+  if (m) return 'ig_' + m[1];
+  m = url.match(/youtube(?:-nocookie)?\.com\/shorts\/([\w-]+)/i);
+  if (m) return 'yt_' + m[1];
+  m = url.match(/[?&]v=([\w-]+)/i) || url.match(/youtu\.be\/([\w-]+)/i) ||
+      url.match(/youtube(?:-nocookie)?\.com\/(?:live|embed|v)\/([\w-]+)/i);
+  if (m) return 'yt_' + m[1];
+  m = url.match(/urn:li:(?:activity|ugcPost|share):(\d{8,})/i);
+  if (m) return 'li_' + m[1];
+  m = url.match(/activity[-:](\d{10,})/i);
+  if (m) return 'li_' + m[1];
+  m = url.match(/linkedin\.com\/posts\/([^\/?#]+)/i);
+  if (m) {
+    var slug = m[1];
+    var inner = slug.match(/-activity-(\d{10,})/i) || slug.match(/(\d{10,})/);
+    if (inner) return 'li_' + inner[1];
+    if (slug.length >= 5) return 'li_' + slug;
+    return '';
+  }
+  m = url.match(/linkedin\.com\/pulse\/([^\/?#]+)/i);
+  if (m && m[1].length >= 5) return 'li_' + m[1];
+  m = url.match(/lnkd\.in\/([\w-]+)/i);
+  if (m && m[1].length >= 5) return 'li_' + m[1];
+  return '';
+}
+
 /** A stored Media ID no extractor should ever produce again ("li", "li_p",
  *  "li_urn:…" residue). These are the cross-player COLLISION ids — the
  *  repair pass rewrites them and ingest prefers the URL key over them. */
@@ -1557,7 +1674,7 @@ function urlKey_(url) {
 /** One read pass over the ledger for the submission checks:
  *  subIds — every Submission ID seen (retried-submission guard);
  *  byKey  — Media ID / URL → [{row, name, snapshot, collabWith, status,
- *                             playerEmail}]. */
+ *                             playerEmail, url, ts}]. */
 function ledgerIndex_(sheet) {
   var out = { byKey: {}, subIds: {}, desigByName: {}, verifiedByName: {} };
   var lastRow = sheet.getLastRow();
@@ -1587,7 +1704,10 @@ function ledgerIndex_(sheet) {
       collabWith: c['Collab With'] !== undefined ? str_(r[c['Collab With']]) : '',
       status: c['Collab Status'] !== undefined ? str_(r[c['Collab Status']]) : '',
       playerEmail: c['Player Email'] !== undefined
-        ? str_(r[c['Player Email']]).trim().toLowerCase() : ''
+        ? str_(r[c['Player Email']]).trim().toLowerCase() : '',
+      url: str_(r[c['Post URL']]),
+      ts: r[c['Timestamp']] instanceof Date
+        ? r[c['Timestamp']].toISOString() : str_(r[c['Timestamp']])
     });
   });
   return out;
@@ -1821,14 +1941,19 @@ function directorFeed_(p) {
   var vals = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
   var c = {};
   HEADERS.forEach(function (h, i) { c[h] = i; });
-  var want = 'Week ' + wantWeek;   // stored as "Week N — Challenge Name"
   function numCell_(v) {
     if (v === '' || v === null || v === undefined) return '';
     var n = Number(String(v).replace(/[,\s]/g, ''));
     return isNaN(n) ? '' : n;
   }
   var allByMedia = {};             // every post of the season
-  var challengeKeys = {};          // keys that belong to the BROWSED week's challenge
+  /* ROUND 39 — ENTRIES = TRUE challenge submissions, not "everything the
+   * week-tag touched". A row is a true entry when its Challenge Entry cell
+   * reads YES (its Media ID equals the Q4 challenge link); a player who
+   * entered a week but whose challenge link never rode a Post URL still
+   * gets ONE link-only pseudo entry built from the Q4 link itself. */
+  var markedByWeek = {};           // wkn → { mediaKey: true }  (marked rows)
+  var chalUrlByPlayer = {};        // wkn → playerKey → { url, wk, ts, name, desig, photo }
   for (var i = vals.length - 1; i >= 0; i--) {          // newest first
     var wk = str_(vals[i][c['Weekly Challenge']]);
     var isChallenge = wkNumOfLabel_(wk) > 0;
@@ -1854,12 +1979,31 @@ function directorFeed_(p) {
           ? vals[i][c['Timestamp']].toISOString() : str_(vals[i][c['Timestamp']]),
         screenshot: str_(vals[i][c['Screenshot Link']])
       };
-      // count DISTINCT media once per week bucket (the room dedups by media)
+      // distinct-media count for the ALL CONTENTS strip (the room dedups)
       var wkn = wkNumOfLabel_(wk);
-      if (wkn) out.weekCounts.challenge[wkn] = (out.weekCounts.challenge[wkn] || 0) + 1;
       out.weekCounts.all[wkn || 'regular'] = (out.weekCounts.all[wkn || 'regular'] || 0) + 1;
     }
-    if (isChallenge && wk.indexOf(want) === 0) challengeKeys[key] = true;
+    // collect the TRUE-entry evidence while we walk the rows
+    var wkn39 = wkNumOfLabel_(wk);
+    if (wkn39) {
+      var chalMark = c['Challenge Entry'] !== undefined
+        ? str_(vals[i][c['Challenge Entry']]) : '';
+      if (chalMark === 'YES') {
+        (markedByWeek[wkn39] = markedByWeek[wkn39] || {})[key] = true;
+      }
+      var chalUrlRow = str_(vals[i][c['Challenge URL']]);
+      if (chalUrlRow) {
+        var pk39 = normName_(nm);
+        var bucket39 = (chalUrlByPlayer[wkn39] = chalUrlByPlayer[wkn39] || {});
+        if (!bucket39[pk39]) {          // newest-first walk → first write wins
+          bucket39[pk39] = { url: chalUrlRow, wk: wk, name: nm,
+            desig: str_(vals[i][c['Player Designation']]),
+            photo: str_(vals[i][c['Player Photo']]),
+            ts: vals[i][c['Timestamp']] instanceof Date
+              ? vals[i][c['Timestamp']].toISOString() : str_(vals[i][c['Timestamp']]) };
+        }
+      }
+    }
     // collab-partner merge + per-person newest-wins photo/views
     var views = numCell_(vals[i][c['OCR Count']]);
     var photo = str_(vals[i][c['Player Photo']]);
@@ -1894,8 +2038,50 @@ function directorFeed_(p) {
       screenshot: entry.screenshot
     };
   }
+  /* which players already own a marked (true-entry) row for a week —
+     computed AFTER the walk so collab partners merged into a marked
+     media count as covered too */
+  var coveredByWeek = {};
+  Object.keys(markedByWeek).forEach(function (w) {
+    var cov = coveredByWeek[w] = {};
+    Object.keys(markedByWeek[w]).forEach(function (k) {
+      var e = allByMedia[k];
+      if (!e) return;
+      Object.keys(e.people).forEach(function (pk) { cov[pk] = true; });
+    });
+  });
+  /* link-only pseudo entries — one per player per week whose Q4 link never
+     rode a Post URL; counted for EVERY week's strip, materialised only for
+     the browsed week (payload discipline) */
+  var pseudoCount = {};
+  Object.keys(chalUrlByPlayer).forEach(function (w) {
+    Object.keys(chalUrlByPlayer[w]).forEach(function (pk) {
+      if (coveredByWeek[w] && coveredByWeek[w][pk]) return;
+      pseudoCount[w] = (pseudoCount[w] || 0) + 1;
+      if (Number(w) !== wantWeek) return;
+      var q = chalUrlByPlayer[w][pk];
+      out.entries.push({
+        mediaId: challengeMediaId_(q.url) || urlKey_(q.url) ||
+                 ('challenge:' + pk + ':' + w),
+        names: [q.name], designations: [q.desig], photos: [q.photo],
+        views: [''], platform: sniffPlatform_(q.url), format: '',
+        url: q.url, challenge: q.wk, weekNum: Number(w),
+        isChallenge: true, challengeUrl: q.url, submittedAt: q.ts,
+        screenshot: ''
+      });
+    });
+  });
+  /* the week strip's challenge count = true entries (marked media + pseudos) */
+  Object.keys(markedByWeek).forEach(function (w) {
+    out.weekCounts.challenge[w] = Object.keys(markedByWeek[w]).length +
+      (pseudoCount[w] || 0);
+  });
+  Object.keys(pseudoCount).forEach(function (w) {
+    if (!out.weekCounts.challenge[w]) out.weekCounts.challenge[w] = pseudoCount[w];
+  });
+  var markedKeys = markedByWeek[wantWeek] || {};
   Object.keys(allByMedia).forEach(function (k) {
-    if (challengeKeys[k]) out.entries.push(toOut_(allByMedia[k]));
+    if (markedKeys[k]) out.entries.push(toOut_(allByMedia[k]));
     out.regular.push(toOut_(allByMedia[k]));
   });
   function chrono_(a, b) {
@@ -1904,6 +2090,16 @@ function directorFeed_(p) {
   out.entries.sort(chrono_);       // submission order — the default tab
   out.regular.sort(chrono_);       // the ALL CONTENTS tab
   return reply_(p, out);
+}
+
+/** Platform label sniffed straight from a URL — the link-only challenge
+ *  entries carry no Format cell, so the room still gets its brand chip. */
+function sniffPlatform_(url) {
+  url = String(url || '');
+  if (/(?:instagram\.com|instagr\.am)/i.test(url)) return 'Instagram';
+  if (/youtube\.com|youtu\.be/i.test(url)) return 'YouTube';
+  if (/linkedin\.com|lnkd\.in/i.test(url)) return 'LinkedIn';
+  return '';
 }
 
 /** ---------- THE DIRECTOR'S LOG (his notes + final wishes) ----------
@@ -3024,7 +3220,68 @@ function finishLedgerSheet_(sheet) {
                    HEADERS.length - sheet.getLastColumn())
          .setValues([HEADERS.slice(sheet.getLastColumn())]);
   }
+  maybeBackfillChallengeEntries_(sheet);
   return sheet;
+}
+
+/** ROUND 39 — ONE-SHOT history stamp for the new Challenge Entry column.
+ *  Runs once ever (Script Property CHAL_ENTRY_BACKFILL), the first time a
+ *  healthy ledger is touched after the new code lands: every week-tagged
+ *  row whose OWN Post URL is the same content as its Q4 Challenge URL gets
+ *  'Challenge Entry' = YES. Regular posts that merely rode a challenge
+ *  submission stay unmarked — exactly the distinction the league asked
+ *  for. A daily ledger backup is taken FIRST (no-ops when today's already
+ *  exists); the pass is idempotent (stamped rows are skipped), so an
+ *  interrupted run simply resumes on the next request. */
+var CHAL_BACKFILL_DONE = false;
+function maybeBackfillChallengeEntries_(sheet) {
+  if (CHAL_BACKFILL_DONE) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('CHAL_ENTRY_BACKFILL') === 'done') {
+      CHAL_BACKFILL_DONE = true;
+      return;
+    }
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {                     // empty ledger — nothing to stamp
+      props.setProperty('CHAL_ENTRY_BACKFILL', 'done');
+      CHAL_BACKFILL_DONE = true;
+      return;
+    }
+    var c = {};
+    HEADERS.forEach(function (h, i) { c[h] = i; });
+    if (c['Challenge Entry'] === undefined) return;   // headers not appended
+    var vals = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+    var writes = [];                       // [sheetRow(1-based)]
+    for (var i = 0; i < vals.length; i++) {
+      var wk = str_(vals[i][c['Weekly Challenge']]);
+      if (!wkNumOfLabel_(wk)) continue;              // regular post
+      var chalUrl = str_(vals[i][c['Challenge URL']]);
+      if (!chalUrl) continue;                        // entered without a link
+      var chalKey = challengeMediaId_(chalUrl) || urlKey_(chalUrl);
+      if (!chalKey) continue;
+      var postUrl = str_(vals[i][c['Post URL']]);
+      var rowKey = str_(vals[i][c['Media ID']]) ||
+        challengeMediaId_(postUrl) || urlKey_(postUrl);
+      if (rowKey && rowKey === chalKey &&
+          str_(vals[i][c['Challenge Entry']]) !== 'YES') {
+        writes.push([i + 2]);
+      }
+    }
+    if (writes.length) {
+      dailyLedgerBackup_();                // insurance before any mutation
+      var markCol = c['Challenge Entry'] + 1;
+      writes.forEach(function (w) {
+        sheet.getRange(w[0], markCol).setValue('YES');
+      });
+      logAdmin_('system', 'BACKFILL', 'challenge-entry',
+        'marked ' + writes.length + ' challenge row(s) from history');
+    } else {
+      logAdmin_('system', 'BACKFILL', 'challenge-entry', 'nothing to mark');
+    }
+    props.setProperty('CHAL_ENTRY_BACKFILL', 'done');
+    CHAL_BACKFILL_DONE = true;
+  } catch (e) { /* never block the caller — an interrupted pass resumes */ }
 }
 
 /** 'PCL-Data' family detector: case/spacing/punctuation-insensitive and

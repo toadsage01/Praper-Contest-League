@@ -626,6 +626,28 @@ html[data-pcl-theme="dark"] .pcl-toggle .pcl-px-moon { display: none; }
   color: var(--pcl-error);
   margin: 5px 2px 0;
 }
+
+/* ROUND 39 — challenge duplicate guard: the inline answer under the Q4
+   link field. Amber = your own earlier content (safe to submit, it gets
+   LINKED to the challenge); red = someone else's content (refused). */
+.pcl-chal-note {
+  margin: 8px 2px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 2px solid var(--pcl-warn, #b45309);
+  border-radius: 6px;
+  background: rgba(180, 83, 9, 0.08);
+  color: var(--pcl-text, #17181d);
+}
+.pcl-chal-note.is-mine { border-color: var(--pcl-warn, #b45309); }
+.pcl-chal-note.is-taken {
+  border-color: var(--pcl-error, #c02626);
+  background: rgba(192, 38, 38, 0.07);
+}
+.pcl-chal-note b { font-family: var(--pcl-font-title, inherit); }
+.pcl-chal-note a { font-weight: 700; color: inherit; }
+.pcl-chal-note[hidden] { display: none; }
 .pcl-field.is-error .pcl-err,
 .pcl-cell.is-error .pcl-err { display: block; }
 

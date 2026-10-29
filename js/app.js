@@ -3464,7 +3464,82 @@
     var entering = week.value !== "";
     fieldOf("challengeUrl").hidden = !entering;
     fieldOf("additionalNotes").hidden = !entering;
+    challengeUrl.__chk = null;              // identity of the question changed
+    challengeCheck_();
   });
+
+  /* ==========================================================================
+     ROUND 39 — CHALLENGE DUPLICATE GUARD (Q4). The league's recurring
+     confusion: the same content uploaded as a general section-2 post AND
+     again as the section-4 challenge entry. The moment a challenge link is
+     committed, the form asks the ledger who owns it (the same checklink the
+     section-2 chips use) and answers INLINE:
+       mine       — amber notice: "already submitted by you", link visible;
+                    submitting is still fine, the ledger LINKS the content
+                    to the challenge instead of counting it twice
+       taken      — red: another player's content; the ingest refuses it too
+       first time — silence: exactly as it has always been
+     ======================================================================== */
+  var chalNote = $("chalNote");
+  var chalState = "";                       // "" | "mine" | "taken"
+  function sniffFmt_(url) {
+    var s = String(url || "");
+    if (/(?:instagram\.com|instagr\.am)/i.test(s)) return "ig_reel";
+    if (/youtube\.com\/shorts\//i.test(s)) return "yt_shorts";
+    if (/youtube\.com|youtu\.be/i.test(s)) return "yt_long";
+    if (/linkedin\.com|lnkd\.in/i.test(s)) return "li_post";
+    return "";
+  }
+  function clearChalNote() {
+    chalState = "";
+    chalNote.hidden = true;
+    chalNote.innerHTML = "";
+    chalNote.className = "pcl-chal-note";
+  }
+  function showChalNote(kind, html) {
+    chalState = kind;
+    chalNote.className = "pcl-chal-note " +
+      (kind === "taken" ? "is-taken" : "is-mine");
+    chalNote.innerHTML = html;
+    chalNote.hidden = false;
+  }
+  function challengeCheck_() {
+    var url = challengeUrl.value.trim();
+    if (!week.value || !url) { clearChalNote(); return; }
+    if (!cfg.gasWebAppUrl) return;          // local mode: nothing to ask
+    var name = fullName.value.trim();
+    var email = sessionEmail_();
+    if (!name && !email) return;            // identity lands with the submit
+    var want = url + "|" + name + "|" + email;
+    if (challengeUrl.__chk === want) return; // same question already asked
+    challengeUrl.__chk = want;
+    jsonpGet({ action: "checklink", url: url,
+               format: sniffFmt_(url), name: name, email: email })
+      .then(function (out) {
+        if (!out || out.ok !== true) return;
+        if (challengeUrl.__chk !== want) return;   // link changed meanwhile
+        if (out.taken) {
+          showChalNote("taken",
+            "<b>Already uploaded by " + esc(out.uploader || "another player") +
+            ".</b> The weekly challenge must be your own content \u2014 this " +
+            "link can't be your entry. <a href=\"" + esc(url) +
+            "\" target=\"_blank\" rel=\"noopener\">open link ↗</a>");
+        } else if (out.mine) {
+          var when = out.mineTs ? String(out.mineTs).slice(0, 10) : "";
+          showChalNote("mine",
+            "<b>You already submitted this content" +
+            (when ? " on " + esc(when) : "") + ".</b> It will be linked to " +
+            "this challenge \u2014 not counted twice. <a href=\"" +
+            esc(out.mineUrl || url) + "\" target=\"_blank\" " +
+            "rel=\"noopener\">open link ↗</a>");
+        } else {
+          clearChalNote();                 // first time — exactly as before
+        }
+      })
+      .catch(function () { /* offline / old backend — ingest re-checks */ });
+  }
+  challengeUrl.addEventListener("change", challengeCheck_);
+  challengeUrl.addEventListener("blur", challengeCheck_);
 
   function looseUrlOk(v) {
     return /^https?:\/\//i.test(v) || (/^[\w-]+(\.[\w-]+)+/.test(v) && !/\s/.test(v));
@@ -3525,6 +3600,11 @@
     if (week.value && challengeUrl.value.trim() &&
         !looseUrlOk(challengeUrl.value.trim())) {
       bad("challengeUrl", "Enter a valid link.");
+    }
+    /* ROUND 39 — another player's content can't be the challenge entry;
+       the inline notice explains, the ingest refuses regardless. */
+    if (week.value && challengeUrl.value.trim() && chalState === "taken") {
+      bad("challengeUrl", "Already uploaded by another player.");
     }
 
     /* if anything post-level failed, make sure the editable view is on

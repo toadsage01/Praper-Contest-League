@@ -1121,6 +1121,23 @@ html[data-pcl-theme="dark"] .pcl-award input {
   box-shadow: 6px 6px 0 var(--pcl-hard, #14235f);
   padding: 26px 26px 24px;
 }
+/* ROUND 39 — the theme's floating close button (top:-14px; right:-14px)
+   was half-swallowed by the card's scroll clip. Inside the profile card it
+   sits INSIDE the corner instead — fully visible, same look. */
+.pcl-prof-card > .pcl-lb-close {
+  top: 10px; right: 10px;
+  z-index: 5;
+}
+/* ROUND 39 — marks THE row that IS a week's challenge submission (its
+   Media ID matches the Q4 challenge link), in the feed and the profile. */
+.pcl-chalchip {
+  display: inline-block; padding: 1px 6px;
+  font-family: var(--pcl-font-title, inherit); font-size: 9.5px;
+  font-weight: 700; letter-spacing: 0.8px;
+  color: var(--pcl-warn, #b45309);
+  border: 2px solid currentColor; border-radius: 3px;
+  vertical-align: 1px;
+}
 .pcl-prof-head { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
 .pcl-prof-ava { width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
   border: 3px solid var(--pcl-primary-deep, #14235f); flex: 0 0 auto; }
