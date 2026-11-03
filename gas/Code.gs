@@ -226,7 +226,7 @@ var COLLAB_CONFIRMED = 'CONFIRMED';
 
 /** Review-pipeline values for the Cross-Check column. */
 var CHECK_PENDING = 'PENDING OCR';
-var CHECK_VALUES = ['PENDING OCR', 'MATCH', 'MISMATCH', 'BOOST?'];
+var CHECK_VALUES = ['PENDING OCR', 'MATCH', 'MISMATCH', 'BOOST?', 'DUPLICATE'];
 
 /** Admin console — one password per admin (see ADMINS near checkAdmin_).
  *  The password IS the identity: every audit entry is stamped with the name
@@ -849,9 +849,17 @@ function checklinkEndpoint_(p) {
       return String(b.ts || '').localeCompare(String(a.ts || ''));
     });
     var lastMine = mineRows[0] || null;
+    /* the WEEK the content already serves — the newest own row may be an
+     * untagged resubmission snapshot, so scan newest → oldest for the first
+     * week tag (a tag beats the clock: it marks what the post was FOR) */
+    var mineWeek = 0;
+    mineRows.forEach(function (r) {
+      if (!mineWeek) mineWeek = wkNumOfLabel_(r.week);
+    });
     return reply_(p, { ok: true, checkable: true, taken: false, mine: true,
                        mineUrl: lastMine ? lastMine.url : '',
-                       mineTs: lastMine ? lastMine.ts : '' });
+                       mineTs: lastMine ? lastMine.ts : '',
+                       mineWeek: mineWeek });
   }
   // a collab tag aimed at THIS player beats a plain "taken" — the whole
   // point of the feature: one tap to accept and both sides score
@@ -1019,17 +1027,39 @@ function weekDeadlineMs_(w) {
 
 /** One read pass over the ledger → rows as objects + totals + players +
  *  per-week public roll-ups for the leaderboard. */
+/** R40 IDENTITY — resolve a ledger row's (work email, normalized name) to
+ *  the bucket key of ONE human. The email aliases first (the company
+ *  identity); a row without an email still reconciles through the name
+ *  alias, so "Manas Ranjan" and "Manas ranjan" land in the same player.
+ *  First-touch aliasing: the first bucket a name maps to keeps it. Pure —
+ *  test_round40 runs this verbatim against the aliasing cases. */
+function identityBucket_(maps, email, norm) {
+  var ikey = (email && maps.byEmail[email]) || maps.byName[norm];
+  if (!ikey) ikey = email || ('name:' + norm);
+  if (email) maps.byEmail[email] = ikey;
+  if (!maps.byName[norm]) maps.byName[norm] = ikey;
+  return ikey;
+}
+
 function collect_() {
   var sheet = getSheet_();
   var lastRow = sheet.getLastRow();
   var totalPosts = Math.max(0, lastRow - 1);
   var media = {}, subs = {}, last = null;
-  var players = {};                    // per-candidate roll-up
+  var players = {};                    // per-candidate roll-up, keyed by IDENTITY
   var rows = [];
   if (totalPosts > 0) {
     var values = sheet.getRange(2, 1, totalPosts, HEADERS.length).getValues();
     var c = {};
     HEADERS.forEach(function (h, i) { c[h] = i; });
+    /* Identity map — one bucket per HUMAN, not per spelling of their name.
+     * The ledger had "Manas Ranjan" and "Manas ranjan" as two separate
+     * players because collect_ keyed the roll-up on the raw name string.
+     * The key is now: the work email when the row carries one (the company
+     * identity), else the case/space-insensitive name — and rows WITHOUT an
+     * email still reconcile into the same bucket through the name alias.
+     * (identityBucket_ below is pure — test_round40 runs it verbatim.) */
+    var idmaps = { byEmail: {}, byName: {} };
     values.forEach(function (r, i) {
       var mid = r[c['Media ID']];
       if (mid) media[mid] = true;
@@ -1038,10 +1068,16 @@ function collect_() {
 
       var name = str_(r[c['Full Name']]);
       if (!name) return;
-      if (!players[name]) {
-        players[name] = {
+      var rowEmail = c['Player Email'] !== undefined
+        ? str_(r[c['Player Email']]).trim().toLowerCase() : '';
+      var ikey = identityBucket_(idmaps, rowEmail, normName_(name));
+      var pl = players[ikey];
+      if (!pl) {
+        pl = players[ikey] = {
           player: name,
           manager: str_(r[c['Reporting Manager']]),
+          email: rowEmail,
+          norm: normName_(name),
           designation: '',
           verified: false,
           submissions: {},
@@ -1052,8 +1088,11 @@ function collect_() {
           verifiedPoints: 0
         };
       }
-      var pl = players[name];
       // identity columns repeat on every row — last non-empty value wins
+      pl.player = name;
+      var mgr = str_(r[c['Reporting Manager']]);
+      if (mgr) pl.manager = mgr;
+      if (rowEmail && !pl.email) pl.email = rowEmail;
       var dg = c['Player Designation'] !== undefined ? str_(r[c['Player Designation']]) : '';
       if (dg) pl.designation = dg;
       var pv = c['Player Verified'] !== undefined ? str_(r[c['Player Verified']]) : '';
@@ -1079,6 +1118,7 @@ function collect_() {
         type: str_(r[c['Entry Type']]),
         snap: str_(r[c['Snapshot #']]),
         name: name,
+        ikey: ikey,                            // identity bucket (email / name)
         manager: str_(r[c['Reporting Manager']]),
         platform: str_(r[c['Platform']]),
         format: str_(r[c['Format']]),
@@ -1150,16 +1190,17 @@ function collect_() {
       firstByMedia[k] = r;
     }
   });
-  var dedup = {};                      // player → deduped season sums
-  var wk = {};                         // week → player → weekly roll-up
+  var dedup = {};                      // identity → deduped season sums
+  var wk = {};                         // week → identity → weekly roll-up
   var desigLookup = {}, verLookup = {};   // identity for board buckets
   Object.keys(players).forEach(function (n) {
-    desigLookup[n] = players[n].designation || PLAYER_META[n] || '';
+    desigLookup[n] = players[n].designation ||
+                     PLAYER_META[players[n].norm] || PLAYER_META[n] || '';
     verLookup[n] = !!players[n].verified;
   });
   Object.keys(latestByMedia).forEach(function (k) {
     var r = latestByMedia[k];
-    if (!players[r.name]) return;      // defensive — name keyed the roll-up
+    if (!players[r.ikey]) return;      // defensive — identity keyed the roll-up
     var collabSplit = r.collabStatus === 'CONFIRMED';
 
     // Confirmed collab pairs share one Media ID, so the latest-snapshot rule
@@ -1170,8 +1211,8 @@ function collect_() {
       rows.forEach(function (x) {
         if ((x.mediaId || 'row:' + x.row) === k &&
             x.collabStatus === 'CONFIRMED' &&
-            players[x.name] &&
-            normName_(x.name) !== normName_(r.name)) {
+            players[x.ikey] &&
+            x.ikey !== r.ikey) {
           partners.push(x);
         }
       });
@@ -1201,8 +1242,8 @@ function collect_() {
         }
         if (pts === '') pts = 0;
       }
-      var d = dedup[row.name] ||
-        (dedup[row.name] = { imp: 0, pts: 0, proj: 0, ver: 0 });
+      var d = dedup[row.ikey] ||
+        (dedup[row.ikey] = { imp: 0, pts: 0, proj: 0, ver: 0 });
       d.imp += views;
       d.pts += pts;
       var proj = numOrBlank_(row.projected);
@@ -1215,13 +1256,15 @@ function collect_() {
       // appear in a W tab. Tag weeks and calendar weeks agree — the form
       // only lets the live week be selected — and a tag beats the clock:
       // the challenge a post was FOR is the truth, not when it landed.
+      // R40 — buckets key by IDENTITY so a name-case variant credits the
+      // same player; the payload exposes only the display fields.
       var tagged = wkNumOfLabel_(row.week);
       if (!tagged) return;                    // regular post — season only
       var bucket = wk[tagged] || (wk[tagged] = {});
-      var wp = bucket[row.name] ||
-        (bucket[row.name] = { player: row.name,
-                              designation: desigLookup[row.name] || '',
-                              verified: verLookup[row.name] || false,
+      var wp = bucket[row.ikey] ||
+        (bucket[row.ikey] = { player: row.name,
+                              designation: desigLookup[row.ikey] || '',
+                              verified: verLookup[row.ikey] || false,
                               posts: 0, impressions: 0, points: 0 });
       wp.posts++;
       wp.impressions += views;
@@ -1249,14 +1292,15 @@ function collect_() {
     return {
       player: pl.player,
       manager: pl.manager,
-      designation: pl.designation || PLAYER_META[k] || '',
+      designation: pl.designation ||
+                   PLAYER_META[pl.norm] || PLAYER_META[k] || '',
       verified: !!pl.verified,
       submissions: Object.keys(pl.submissions).length,
       posts: pl.posts,
       uniqueMedia: Object.keys(pl.media).length,
       formatRatio: pl.formats,
       impressions: d.imp,
-      points: d.pts + (awardTotal[normName_(k)] || 0),
+      points: d.pts + (awardTotal[pl.norm] || 0),
       projectedPoints: d.proj,         // deduped — latest snapshot per media
       verifiedPoints: d.ver
     };
@@ -1268,8 +1312,16 @@ function collect_() {
       byWeek[String(w)] = Object.keys(wk[w]).map(function (n) {
         var p = wk[w][n];
         var aw = awardWeek[String(w)];
-        if (aw) p.points += aw[normName_(n)] || 0;
-        return p;
+        // awards key on the normalized NAME; the bucket key is the identity
+        var bonus = aw && players[n] ? (aw[players[n].norm] || 0) : 0;
+        return {
+          player: p.player,
+          designation: p.designation,
+          verified: p.verified,
+          posts: p.posts,
+          impressions: p.impressions,
+          points: p.points + bonus
+        };
       }).sort(function (a, b) {
         return b.points - a.points || b.impressions - a.impressions ||
                a.player.localeCompare(b.player);
@@ -1706,6 +1758,7 @@ function ledgerIndex_(sheet) {
       playerEmail: c['Player Email'] !== undefined
         ? str_(r[c['Player Email']]).trim().toLowerCase() : '',
       url: str_(r[c['Post URL']]),
+      week: str_(r[c['Weekly Challenge']]),
       ts: r[c['Timestamp']] instanceof Date
         ? r[c['Timestamp']].toISOString() : str_(r[c['Timestamp']])
     });

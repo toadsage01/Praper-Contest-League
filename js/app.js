@@ -1993,6 +1993,14 @@
     if (!submitGates.seasonOpen) return true;
     return submitGates.weeks && submitGates.weeks[String(w)] === false;
   }
+  /* ROUND 40 — the wire value of the week select: "" (not entering — either
+     untouched placeholder or the explicit "Not entering" pick) or the
+     "Week N — name" label. The backend contract ("" = regular post) is
+     unchanged; the placeholder only exists so nobody submits section 4
+     without actually looking at it. */
+  function weekChoice() {
+    return week.value === "none" ? "" : week.value;
+  }
   function buildWeekOptions() {
     var cur = currentWeek();
     var seasonClosed = submitGates && !submitGates.seasonOpen;
@@ -2000,7 +2008,12 @@
     var curClosed = weekClosed_(cur);
     if (list.indexOf(cur) === -1 && curClosed) list.push(cur);   // keep the closed live week visible (disabled)
     list.sort(function (a, b) { return a - b; });
-    var opts = '<option value="">Not entering</option>';
+    /* ROUND 40 — the section is a MANDATORY pick: the select opens on a
+       "Select an option" placeholder, and "Not entering" is a deliberate
+       choice (value "none", normalized back to "" on the wire so the
+       backend's empty-string contract is untouched). */
+    var opts = '<option value="">Select an option</option>' +
+               '<option value="none">Not entering</option>';
     list.forEach(function (w) {
       var c = CHALLENGES[w - 1];
       if (!c) return;
@@ -3461,7 +3474,7 @@
   });
   week.addEventListener("change", function () {
     clearFieldErr("challengeWeek");
-    var entering = week.value !== "";
+    var entering = weekChoice() !== "";
     fieldOf("challengeUrl").hidden = !entering;
     fieldOf("additionalNotes").hidden = !entering;
     challengeUrl.__chk = null;              // identity of the question changed
@@ -3505,7 +3518,7 @@
   }
   function challengeCheck_() {
     var url = challengeUrl.value.trim();
-    if (!week.value || !url) { clearChalNote(); return; }
+    if (!weekChoice() || !url) { clearChalNote(); return; }
     if (!cfg.gasWebAppUrl) return;          // local mode: nothing to ask
     var name = fullName.value.trim();
     var email = sessionEmail_();
@@ -3526,12 +3539,16 @@
             "\" target=\"_blank\" rel=\"noopener\">open link ↗</a>");
         } else if (out.mine) {
           var when = out.mineTs ? String(out.mineTs).slice(0, 10) : "";
+          var wkN = Number(out.mineWeek) || 0;
           showChalNote("mine",
-            "<b>You already submitted this content" +
-            (when ? " on " + esc(when) : "") + ".</b> It will be linked to " +
-            "this challenge \u2014 not counted twice. <a href=\"" +
-            esc(out.mineUrl || url) + "\" target=\"_blank\" " +
-            "rel=\"noopener\">open link ↗</a>");
+            "<b>" +
+            (wkN ? "Week " + wkN + " submission already made" +
+                  (when ? " on " + esc(when) : "")
+                 : "You already submitted this content" +
+                   (when ? " on " + esc(when) : "")) +
+            ".</b> It will be linked to this challenge — not counted twice. " +
+            "<a href=\"" + esc(out.mineUrl || url) + "\" target=\"_blank\" " +
+            "rel=\"noopener\">open your earlier link ↗</a>");
         } else {
           clearChalNote();                 // first time — exactly as before
         }
@@ -3567,7 +3584,13 @@
     if (submitGates && !submitGates.seasonOpen) {
       bad("postLinks", "Submissions are paused right now");
     }
-    if (week.value && weekClosed_(wkNumOf_(week.value))) {
+    /* ROUND 40 — section 4 is a deliberate pick: placeholder, a real
+       "Not entering" choice, or a week. Submitting without choosing stops
+       here, the same as any other required field. */
+    if (!week.value) {
+      bad("challengeWeek", "Select an option — a week or \u201cNot entering\u201d.");
+    }
+    if (weekChoice() && weekClosed_(wkNumOf_(weekChoice()))) {
       bad("challengeWeek", "Entries closed right now");
     }
     if (!photoShown && !photoState.file) {
@@ -3596,14 +3619,14 @@
       }
     });
 
-    if (challengeUrl.value.trim() && !week.value) bad("challengeWeek");
-    if (week.value && challengeUrl.value.trim() &&
+    if (challengeUrl.value.trim() && !weekChoice()) bad("challengeWeek");
+    if (weekChoice() && challengeUrl.value.trim() &&
         !looseUrlOk(challengeUrl.value.trim())) {
       bad("challengeUrl", "Enter a valid link.");
     }
     /* ROUND 39 — another player's content can't be the challenge entry;
        the inline notice explains, the ingest refuses regardless. */
-    if (week.value && challengeUrl.value.trim() && chalState === "taken") {
+    if (weekChoice() && challengeUrl.value.trim() && chalState === "taken") {
       bad("challengeUrl", "Already uploaded by another player.");
     }
 
@@ -3652,9 +3675,9 @@
           contentType: p.ctype === "PERSONAL" ? "PERSONAL" : "PRAPER"
         };
       }),
-      challengeWeek: week.value,
-      challengeUrl: week.value ? challengeUrl.value.trim() : "",
-      additionalNotes: week.value ? notes.value.trim() : ""
+      challengeWeek: weekChoice(),
+      challengeUrl: weekChoice() ? challengeUrl.value.trim() : "",
+      additionalNotes: weekChoice() ? notes.value.trim() : ""
     };
     return {
       submissionId: "pcl-" + Date.now().toString(36) +

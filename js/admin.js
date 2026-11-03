@@ -394,6 +394,14 @@
             format: "YouTube Shorts", mult: 1.25, url: "https://youtube.com/shorts/mockS02",
             mediaId: "yt_mockS02", week: "Week 1 — Best Original Content",
             claimed: 22100, projected: 27625, check: "PENDING OCR", ocr: "", verified: "" }),
+      /* ROUND 40 demo — the same Shorts link resubmitted under another name
+         and another week: both rows wear the DUP? hint and the POSSIBLE
+         DUPES quickchip catches them */
+      row({ row: 14, ts: new Date(t - 46 * H).toISOString(), id: "pcl-mock-h8", type: "NEW",
+            snap: 1, name: "Sneha Rao", manager: "Rahul", platform: "YouTube",
+            format: "YouTube Shorts", mult: 1.25, url: "https://youtube.com/shorts/mockS02",
+            mediaId: "yt_mockS02", week: "Week 2 — Best Storytelling Debut",
+            claimed: 22100, projected: 27625, check: "PENDING OCR", ocr: "", verified: "" }),
       row({ row: 13, ts: new Date(t - 50 * H).toISOString(), id: "pcl-mock-g5", type: "NEW",
             snap: 1, name: "Priya Sharma", manager: "Rahul", platform: "Instagram",
             format: "Instagram Reel", mult: 1.25, url: "https://instagram.com/reel/Cx4mock04/",
@@ -954,6 +962,46 @@
   /* ============================================================================
      FILTERS + FEED
      ========================================================================== */
+  /* ROUND 40 — POSSIBLE DUPES detection. One physical post, several ledger
+     rows: the canonical Media ID (or the normalized URL when a row has no
+     id) seen under a second identity (work email, else the name) or a
+     second week tag. CONFIRMED collab pairs legitimately share one Media
+     ID — they never count. The reviewer decides: the row gets a DUP? hint
+     chip, the POSSIBLE DUPES quickchip filters to them, and the DUPLICATE
+     cross-check status is the verdict. (The roll-up never double-counts a
+     Media ID anyway; this catches the different-URL re-shares.) */
+  function urlKeyAdm(u) {
+    var s = String(u || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https?:\/\//i, "").replace(/^www\./i, "").toLowerCase();
+    return s.split(/[?#]/)[0].replace(/\/+$/, "");
+  }
+  function computeDupHints() {
+    var byKey = {};
+    state.rows.forEach(function (r) {
+      var k = String(r.mediaId || "").trim() || urlKeyAdm(r.url);
+      if (!k) return;
+      var b = byKey[k] || (byKey[k] = { ids: {}, weeks: {} });
+      var who = String(r.email || "").trim().toLowerCase() ||
+                String(r.name || "").toLowerCase().replace(/\s+/g, " ").trim();
+      b.ids[who] = true;
+      if (r.weekNum) b.weeks[r.weekNum] = true;
+    });
+    state.rows.forEach(function (r) {
+      var k = String(r.mediaId || "").trim() || urlKeyAdm(r.url);
+      var b = k ? byKey[k] : null;
+      if (!b) { r.__dup = null; return; }
+      var multiId = Object.keys(b.ids).length > 1 &&
+                    r.collabStatus !== "CONFIRMED";
+      var multiWeek = Object.keys(b.weeks).length > 1;
+      if (!multiId && !multiWeek) { r.__dup = null; return; }
+      var why = [];
+      if (multiId) why.push("same post also sits under another player");
+      if (multiWeek) why.push("same post is tagged in another week");
+      r.__dup = why.join(" · ");
+    });
+  }
+
   function filteredRows() {
     var q = state.filters.q.toLowerCase();
     return state.rows.filter(function (r) {
@@ -965,15 +1013,19 @@
         if ((d0.ctype || "") !== state.filters.ctype) return false;
       }
       if (state.filters.status !== "all") {
-        var d = displayOf(r);
-        if (state.filters.status === "VERIFIED") {
-          /* DONE = the review finished on this row: cross-check MATCH (the
-             reviewer confirmed the claim) OR a verified count typed in.
-             Before this, DONE only counted a filled verified number, so a
-             row saved as MATCH never appeared here and the tab "never
-             updated" — MATCH is exactly what marks a row done. */
-          if (d.check !== "MATCH" && d.verified === "") return false;
-        } else if (d.check !== state.filters.status) return false;
+        if (state.filters.status === "dups") {
+          if (!r.__dup) return false;         // POSSIBLE DUPES quickchip
+        } else {
+          var d = displayOf(r);
+          if (state.filters.status === "VERIFIED") {
+            /* DONE = the review finished on this row: cross-check MATCH (the
+               reviewer confirmed the claim) OR a verified count typed in.
+               Before this, DONE only counted a filled verified number, so a
+               row saved as MATCH never appeared here and the tab "never
+               updated" — MATCH is exactly what marks a row done. */
+            if (d.check !== "MATCH" && d.verified === "") return false;
+          } else if (d.check !== state.filters.status) return false;
+        }
       }
       if (q) {
         var hay = (r.name + " " + r.url + " " + r.mediaId + " " + r.id).toLowerCase();
@@ -1002,7 +1054,8 @@
       return '<option value="' + esc(f) + '">' + esc(fmtShort(f)) + "</option>";
     }).join("");
 
-    st.innerHTML = ["all", "PENDING OCR", "MATCH", "MISMATCH", "BOOST?", "VERIFIED"]
+    st.innerHTML = ["all", "PENDING OCR", "MATCH", "MISMATCH", "BOOST?",
+                    "DUPLICATE", "VERIFIED"]
       .map(function (s) {
         return '<option value="' + s + '">' +
           (s === "all" ? "ALL STATUS" : s) + "</option>";
@@ -1043,6 +1096,11 @@
       (r.type === "UPDATE" ? "" : '<span class="pcl-tag pcl-tag--new">NEW</span>') +
       collabBadgeHtml(r) +
       ctTagHtml(d.ctype) +
+      (r.__dup
+        ? '<span class="pcl-tag pcl-tag--dup" title="' +
+          esc(r.__dup + " — mark it DUPLICATE if it is a resubmission") +
+          '">DUP?</span>'
+        : "") +
       (r.tracked && r.trackedViews !== "" && r.trackedViews !== undefined
         ? '<span class="pcl-tag pcl-tag--track" title="Latest platform-tracked count (SYNC NOW pipeline)">AUTO ' +
           esc(fmt(r.trackedViews)) + "</span>"
@@ -1078,7 +1136,7 @@
       '<span class="fr-status"><select class="pcl-input pcl-select" data-edit="status"' +
         ' data-row="' + r.row + '" data-v="' + esc(d.check) + '"' +
         ' aria-label="Cross-check status for row ' + r.row + '">' +
-        ["PENDING OCR", "MATCH", "MISMATCH", "BOOST?"].map(function (s) {
+        ["PENDING OCR", "MATCH", "MISMATCH", "BOOST?", "DUPLICATE"].map(function (s) {
           return '<option value="' + s + '"' + (s === d.check ? " selected" : "") + ">" + s + "</option>";
         }).join("") +
       "</select></span>" +
@@ -1086,6 +1144,7 @@
   }
 
   function renderFeed() {
+    computeDupHints();
     var rows = filteredRows();
     var wrap = $("feedRows");
     wrap.innerHTML = rows.map(feedRowHtml).join("");
@@ -1101,8 +1160,10 @@
   var QUICK_DEFS = [
     { key: "all",         label: "ALL" },
     { key: "PENDING OCR", label: "NEEDS REVIEW" },
+    { key: "dups",        label: "POSSIBLE DUPES" },
     { key: "BOOST?",      label: "BOOST SUSPECT" },
     { key: "MISMATCH",    label: "MISMATCH" },
+    { key: "DUPLICATE",   label: "DUPLICATE" },
     { key: "VERIFIED",    label: "DONE" }
   ];
   function renderQuickChips() {
@@ -1113,6 +1174,7 @@
       state.rows.forEach(function (r) {
         var v = displayOf(r);
         if (d.key === "all") n++;
+        else if (d.key === "dups") { if (r.__dup) n++; }
         else if (d.key === "VERIFIED") {
           /* same rule as the filter: MATCH or a verified count = done */
           if (v.check === "MATCH" || v.verified !== "") n++;
@@ -1120,7 +1182,8 @@
         else if (v.check === d.key) n++;
       });
       var active = state.filters.status === d.key ? " is-active" : "";
-      var tone = d.key === "BOOST?" || d.key === "MISMATCH" ? " pcl-qchip--hot" :
+      var tone = d.key === "BOOST?" || d.key === "MISMATCH" ||
+                 (d.key === "dups" && n) ? " pcl-qchip--hot" :
                  (d.key === "PENDING OCR" && n ? " pcl-qchip--todo" : "");
       return '<button type="button" class="pcl-qchip' + active + tone +
         '" data-qfilter="' + d.key + '">' + d.label +
@@ -1152,6 +1215,11 @@
         : '<span class="pcl-tag pcl-tag--new">NEW</span>';
       html += collabBadgeHtml(r);
       html += ctTagHtml(d.ctype);
+      html += r.__dup
+        ? '<span class="pcl-tag pcl-tag--dup" title="' +
+          esc(r.__dup + " — mark it DUPLICATE if it is a resubmission") +
+          '">DUP?</span>'
+        : "";
       if (dirty) html += '<span class="pcl-tag pcl-tag--dirty">STAGED</span>';
       tags.innerHTML = html;
     }
@@ -2631,7 +2699,7 @@
     Array.prototype.forEach.call(
       $("tabs").querySelectorAll(".pcl-vbtn"),
       function (b) { b.classList.toggle("is-active", b === btn); });
-    ["feed", "players", "reports", "audit", "log"].forEach(function (t) {
+    ["feed", "players", "reports", "audit", "log", "settings"].forEach(function (t) {
       $("tab" + t.charAt(0).toUpperCase() + t.slice(1)).hidden = t !== tab;
     });
   });

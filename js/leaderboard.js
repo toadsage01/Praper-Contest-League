@@ -63,6 +63,55 @@
   }
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
 
+  /* ---------- ROUND 40 — pixel trophy cups (gold / silver / bronze) ----------
+     Hand-set 12×12 pixel matrices in the league's arcade style: cup bowl,
+     handles, stem, base + floating sparkle pixels — the shape of the
+     reference art the league picked, rebuilt as crisp <rect>s so it stays
+     sharp at any size and ships with zero image assets. */
+  var TROPHY_PIX = [
+    "............",
+    "..s......s..",
+    ".aaaaaaaaaa.",
+    "bsaaaaaaaaab",
+    "baaaaaaaaaab",
+    ".baaaaaaaab.",
+    "..baaaaaab..",
+    "....baab....",
+    ".....bb.....",
+    "...aaaaaa...",
+    "..aaaaaaaa..",
+    "..dddddddd.."
+  ];
+  var TROPHY_META = {
+    g: { a: "#f2b63c", b: "#c78d16", d: "#7a5410", s: "#ffe9a8" },
+    s: { a: "#d7dee8", b: "#a7b2c2", d: "#66748b", s: "#ffffff" },
+    b: { a: "#d98e4a", b: "#a9642e", d: "#6e3c17", s: "#ffd9ad" }
+  };
+  function pixelSvg(map, col) {
+    var r = "";
+    map.forEach(function (line, y) {
+      for (var x = 0; x < line.length; x++) {
+        var ch = line.charAt(x);
+        if (ch === ".") continue;
+        r += '<rect x="' + x + '" y="' + y + '" width="1.05" height="1.05"' +
+             ' fill="' + col[ch] + '"/>';
+      }
+    });
+    return '<svg class="pcl-trophy-svg" viewBox="0 0 12 12"' +
+           ' shape-rendering="crispEdges" aria-hidden="true">' + r + "</svg>";
+  }
+  var TROPHY_SVGS = {
+    g: pixelSvg(TROPHY_PIX, TROPHY_META.g),
+    s: pixelSvg(TROPHY_PIX, TROPHY_META.s),
+    b: pixelSvg(TROPHY_PIX, TROPHY_META.b)
+  };
+  /* the week-winner badge: mini gold cup + the week number on a W */
+  function wBadge(w) {
+    return '<span class="pcl-wbadge" title="Won the Week ' + w +
+      ' challenge"><span class="pcl-wbadge-cup">' + TROPHY_SVGS.g +
+      "</span>W" + Number(w) + "</span>";
+  }
+
   /* ---------- reading-font toggle (SF Pro default ⇄ OG arcade) ---------- */
   var fontBtn = $("pclFontToggle");
   if (fontBtn) {
@@ -296,6 +345,25 @@
              a.name.localeCompare(b.name);
     });
     var weeks = data.weeks && data.weeks.byWeek ? data.weeks : null;
+    /* ROUND 40 — week winners + per-player win lists. The server ranks each
+       week's roll-up (post points + judge-panel awards) — its first entry IS
+       that week's winner, so every view can wear the W-badge without a new
+       endpoint. Keyed by the normalized name. */
+    var weekWinners = {};
+    var wonBy = {};
+    if (weeks && weeks.byWeek) {
+      Object.keys(weeks.byWeek).forEach(function (w) {
+        var top = weeks.byWeek[w][0];
+        if (!top || !top.player) return;
+        var k = normKey(top.player);
+        weekWinners[w] = k;
+        if (!wonBy[k]) wonBy[k] = [];
+        wonBy[k].push(Number(w));
+      });
+      Object.keys(wonBy).forEach(function (k) {
+        wonBy[k].sort(function (a, b) { return a - b; });
+      });
+    }
     return {
       players: players,
       weeks: weeks,
@@ -303,23 +371,58 @@
       totalPosts: data.totalPosts,
       uniqueMedia: data.uniqueMedia,
       generatedAt: data.generatedAt,
+      weekWinners: weekWinners,
+      wonBy: wonBy,
       gallery: buildGallery(data.rows)   // old backends send no rows → {}
     };
   }
 
-  /* ---------- rendering ---------- */
+  /* ---------- rendering ----------
+     ROUND 40 — two row shapes:
+     · SEASON 2 (state.view "all") keeps the classic five columns; the top-3
+       rank chip becomes a gold/silver/bronze pixel trophy, and each name
+       wears a small W-badge for every weekly challenge it has won.
+     · W1..W10 tabs are the ENTRY LISTS: serial number · name (+ winner
+       badge) · designation · the uploaded challenge entry (thumbnail/link
+       preview). No impressions, no points — weekly challenges are judged,
+       not counted. Order = submission order (the entry that landed first
+       is serial 01). */
   function viewPlayers() {
     var d = state.data;
     if (!d) return [];
-    if (state.view === "all") return d.players;
-    var list = (d.weeks && d.weeks.byWeek && d.weeks.byWeek[String(state.view)]) || [];
-    return list.map(function (p) {
+    if (state.view === "all") {
+      return d.players.map(function (p) {
+        return {
+          name: p.name, designation: p.designation,
+          impressions: p.impressions, points: p.points,
+          wins: (d.wonBy || {})[normKey(p.name)] || []
+        };
+      });
+    }
+    var wKey = String(state.view);
+    var list = (d.weeks && d.weeks.byWeek && d.weeks.byWeek[wKey]) || [];
+    var gal = d.gallery || {};
+    var winnerKey = (d.weekWinners || {})[wKey] || "";
+    var out = list.map(function (p, si) {
+      var g = gal[normKey(p.player)];
+      var post = null;
+      if (g && g.posts.length) {
+        for (var i = 0; i < g.posts.length; i++) {
+          if (g.posts[i].weekNum === state.view) { post = g.posts[i]; break; }
+        }
+      }
       return { name: p.player, designation: p.designation,
-               impressions: toNum(p.impressions), points: toNum(p.points) || 0 };
-    }).sort(function (a, b) {
-      return b.points - a.points || (b.impressions || 0) - (a.impressions || 0) ||
-             a.name.localeCompare(b.name);
+               won: normKey(p.player) === winnerKey,
+               post: post, ts: post ? String(post.ts || "") : "",
+               serverIndex: si };
     });
+    out.sort(function (a, b) {
+      if (a.ts && b.ts && a.ts !== b.ts) return a.ts.localeCompare(b.ts);
+      if (a.ts && !b.ts) return -1;
+      if (!a.ts && b.ts) return 1;
+      return a.serverIndex - b.serverIndex;
+    });
+    return out;
   }
 
   /* VERIFICATION TICK REMOVED — league policy: verification status NEVER
@@ -332,15 +435,65 @@
     var desig = p.designation
       ? esc(p.designation)
       : '<span class="pcl-desig-blank">—</span>';
+    /* SEASON tab only — the top-3 rank chip becomes the pixel trophy
+       (gold / silver / bronze); ranks 4+ keep the numeric chip. */
+    var rankInner = i < 3
+      ? '<span class="pcl-trophy pcl-trophy--' + ["g", "s", "b"][i] +
+        '" title="Season rank ' + (i + 1) + '">' +
+        TROPHY_SVGS[["g", "s", "b"][i]] + "</span>"
+      : '<span class="pcl-rankchip">' + pad2(i + 1) + "</span>";
+    var wins = (p.wins || []).map(wBadge).join("");
     return '<div class="pcl-row pcl-row--entry' + rankCls +
         '" data-galname="' + esc(p.name) + '" tabindex="0" role="button"' +
         ' aria-label="View ' + esc(p.name) + '&#39;s uploaded posts">' +
       '<div class="pcl-cell pcl-cell--rank"><span class="pcl-rank">' +
-        '<span class="pcl-rankchip">' + pad2(i + 1) + '</span></span></div>' +
-      '<div class="pcl-cell pcl-cell--name"><span class="pcl-name">' + esc(p.name) + '</span></div>' +
+        rankInner + '</span></div>' +
+      '<div class="pcl-cell pcl-cell--name"><span class="pcl-name">' +
+        esc(p.name) + wins + '</span></div>' +
       '<div class="pcl-cell pcl-cell--desig"><span class="pcl-desig">' + desig + '</span></div>' +
       '<div class="pcl-cell pcl-cell--imp"><span class="pcl-num">' + fmt(p.impressions) + '</span></div>' +
       '<div class="pcl-cell pcl-cell--pts"><span class="pcl-num">' + fmt(p.points) + '</span></div>' +
+      '</div>';
+  }
+
+  /* W-tab row — serial · name (+ winner badge) · designation · entry preview.
+     No impressions, no points anywhere: the week is judged, not counted. */
+  function rowHtmlWeek(p, i) {
+    var desig = p.designation
+      ? esc(p.designation)
+      : '<span class="pcl-desig-blank">—</span>';
+    var badge = p.won ? wBadge(state.view) : "";
+    var prev;
+    if (p.post) {
+      var u = safeUrl(p.post.url);
+      var th = p.post.plat === "yt" && p.post.mediaId
+        ? ytThumbUrl(p.post.mediaId) : "";
+      prev = '<span class="pcl-entry-prev">' +
+          (th
+            ? '<img class="pcl-entry-thumb" src="' + esc(th) +
+              '" alt="" loading="lazy" />'
+            : '<span class="pcl-entry-tile pcl-entry-tile--' +
+              (p.post.plat || "web") + '">' +
+              (GAL_SVGS[p.post.plat] || GAL_SVGS.web) + "</span>") +
+          (u
+            ? '<a class="pcl-entry-link" href="' + esc(u) +
+              '" target="_blank" rel="noopener" title="' + esc(p.post.url) +
+              '">OPEN ENTRY &#8599;</a>'
+            : '<span class="pcl-entry-link is-dead">LINK UNAVAILABLE</span>') +
+        "</span>";
+    } else {
+      prev = '<span class="pcl-entry-none">—</span>';
+    }
+    return '<div class="pcl-row pcl-row--entry pcl-row--week' +
+        (p.won ? " is-winner" : "") +
+        '" data-galname="' + esc(p.name) + '" tabindex="0" role="button"' +
+        ' aria-label="View ' + esc(p.name) + '&#39;s weekly entry">' +
+      '<div class="pcl-cell pcl-cell--rank"><span class="pcl-rank">' +
+        '<span class="pcl-rankchip">' + pad2(i + 1) + '</span></span></div>' +
+      '<div class="pcl-cell pcl-cell--name"><span class="pcl-name">' +
+        esc(p.name) + badge + '</span></div>' +
+      '<div class="pcl-cell pcl-cell--desig"><span class="pcl-desig">' + desig + '</span></div>' +
+      '<div class="pcl-cell pcl-cell--entry">' + prev + '</div>' +
       '</div>';
   }
 
@@ -355,12 +508,18 @@
 
   function render() {
     var list = viewPlayers();
+    var weekMode = state.view !== "all";
+    var labels = $("pclLabels");
+    if (labels) {
+      labels.className = "pcl-collabels" + (weekMode ? " is-week" : "");
+    }
     if (!list.length) {
       show("empty");
       $("pclRows").innerHTML = "";
       return;
     }
-    $("pclRows").innerHTML = list.map(rowHtml).join("");
+    $("pclRows").innerHTML =
+      list.map(weekMode ? rowHtmlWeek : rowHtml).join("");
     show("rows");
   }
 
@@ -650,13 +809,17 @@
       case "ArrowUp": ev.preventDefault(); galStep(-1, 0); break;
     }
   });
-  /* board rows open the theatre — click or Enter/Space (rows are focusable) */
+  /* board rows open the theatre — click or Enter/Space (rows are focusable).
+     The W-tab OPEN ENTRY link navigates instead: an <a> click never opens
+     the theatre, and neither does Enter/Space on a focused link. */
   $("pclRows").addEventListener("click", function (ev) {
+    if (ev.target.closest("a")) return;
     var row = ev.target.closest("[data-galname]");
     if (row) openGallery(row.getAttribute("data-galname"));
   });
   $("pclRows").addEventListener("keydown", function (ev) {
     if (ev.key !== "Enter" && ev.key !== " ") return;
+    if (ev.target.closest && ev.target.closest("a")) return;
     var row = ev.target.closest("[data-galname]");
     if (row) { ev.preventDefault(); openGallery(row.getAttribute("data-galname")); }
   });

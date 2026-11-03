@@ -71,6 +71,9 @@ footer.pcl-footer.pcl-wide { max-width: 1180px; }
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin: 0 0 16px;
 }
+/* ROUND 40 — six tabs now; the strip wraps instead of pushing the page wide
+   on narrow screens */
+.pcl-adminbar .pcl-viewtoggle { flex-wrap: wrap; }
 .pcl-adminbar .pcl-tabs { margin-left: 0; }
 .pcl-adminbar-right {
   margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -956,6 +959,23 @@ html:not([data-pcl-font="og"]) .pcl-photolb-line { font-size: 11.5px; letter-spa
   color: #1d9e57;
   border-color: #1d9e57;
   background: rgba(29, 158, 87, 0.08);
+}
+
+/* ROUND 40 — possible-duplicate hint chip (reviewer decides; the POSSIBLE
+   DUPES quickchip filters the feed down to these rows) */
+.pcl-tag--dup {
+  color: #b45309;
+  border-color: #b45309;
+  background: rgba(180, 83, 9, 0.1);
+}
+
+/* ROUND 40 — the cog icon on the SETTINGS tab (pixel gear, currentColor) */
+.pcl-tabico {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 6px;
 }
 
 /* review modal — full designation line */

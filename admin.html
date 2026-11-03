@@ -31,7 +31,7 @@
 
   <!-- Shared pixel design system + admin console components -->
   <link rel="stylesheet" href="css/theme.css" />
-  <link rel="stylesheet" href="css/admin.css?v=20261029a" />
+  <link rel="stylesheet" href="css/admin.css?v=20261103a" />
 </head>
 <body>
   <!-- Arcade marquee: the PCL logo's native dark band, both themes.
@@ -104,6 +104,10 @@
                   role="tab">AUDIT</button>
           <button type="button" class="pcl-vbtn" data-tab="log"
                   role="tab">ADMIN LOG</button>
+          <button type="button" class="pcl-vbtn" data-tab="settings"
+                  role="tab" title="League switches, windows and data tools">
+            <svg class="pcl-tabico" viewBox="0 0 12 12" shape-rendering="crispEdges"
+                 fill="currentColor" aria-hidden="true"><rect x="4" y="0" width="4" height="1"/><rect x="3" y="1" width="6" height="1"/><rect x="2" y="2" width="8" height="1"/><rect x="1" y="3" width="10" height="1"/><rect x="1" y="4" width="10" height="1"/><rect x="0" y="5" width="12" height="1"/><rect x="0" y="6" width="4" height="1"/><rect x="8" y="6" width="4" height="1"/><rect x="0" y="7" width="4" height="1"/><rect x="8" y="7" width="4" height="1"/><rect x="0" y="8" width="12" height="1"/><rect x="1" y="9" width="10" height="1"/><rect x="2" y="10" width="8" height="1"/><rect x="4" y="11" width="4" height="1"/></svg>SETTINGS</button>
         </div>
         <div class="pcl-adminbar-right">
           <span class="pcl-tag pcl-tag--operator" id="opChip" hidden
@@ -239,6 +243,34 @@
             reported twice yet — the timeline appears with the first
             update snapshot.</p>
         </div>
+      </section>
+
+      <!-- ============ TAB 6 · LEAGUE SETTINGS (ROUND 40) =================
+           All the CONTROLS live here, away from the read-only reports:
+           the submission gates (the weekly portal switch), the data
+           tools. Cog icon on the tab. -->
+      <section id="tabSettings" class="pcl-tab" hidden>
+        <!-- moved out of REPORTS (ROUND 40) — the admins' open/close power -->
+        <div class="pcl-panel">
+          <h2 class="pcl-panel-title">Submissions — Open / Close</h2>
+          <p class="pcl-hint">Your switches, enforced live by the backend:
+            close the whole season, or close any single week's challenge
+            entries. Closing a week only stops its CHALLENGE posts — regular
+            ("Not entering") uploads keep flowing unless the season switch
+            is off. Players see the closed state on the form instantly.
+            Weeks whose Tuesday 6:00 PM lock has passed show PAST below —
+            reopen one from the strip when someone needs more time; a closed
+            gate always wins over a reopen, and nothing about this reaches
+            the players' screens. Weeks that have not started yet show
+            UPCOMING — a week reaches the entry form while its window is
+            open or while a reopen is active, never before.</p>
+          <div class="pcl-gates" id="gatePanel">
+            <div class="pcl-gates-master" id="gateMaster"></div>
+            <div class="pcl-gates-weeks" id="gateWeeks"></div>
+          </div>
+        </div>
+
+        <!-- moved out of AUDIT (ROUND 40) -->
         <div class="pcl-panel">
           <h2 class="pcl-panel-title">Data Tools</h2>
           <p class="pcl-hint">REPAIR MEDIA IDS rewrites every ledger Media ID
@@ -271,31 +303,12 @@
       <section id="tabReports" class="pcl-tab" hidden>
         <div class="pcl-cards" id="seasonCards"></div>
 
-        <!-- ROUND 35 — SUBMISSION GATES: the admins' open/close power -->
-        <div class="pcl-panel">
-          <h2 class="pcl-panel-title">Submissions — Open / Close</h2>
-          <p class="pcl-hint">Your switches, enforced live by the backend:
-            close the whole season, or close any single week's challenge
-            entries. Closing a week only stops its CHALLENGE posts — regular
-            ("Not entering") uploads keep flowing unless the season switch
-            is off. Players see the closed state on the form instantly.
-            Weeks whose Tuesday 6:00 PM lock has passed show PAST below —
-            reopen one from the strip when someone needs more time; a closed
-            gate always wins over a reopen, and nothing about this reaches
-            the players' screens. Weeks that have not started yet show
-            UPCOMING — a week reaches the entry form while its window is
-            open or while a reopen is active, never before.</p>
-          <div class="pcl-gates" id="gatePanel">
-            <div class="pcl-gates-master" id="gateMaster"></div>
-            <div class="pcl-gates-weeks" id="gateWeeks"></div>
-          </div>
-        </div>
-
         <div class="pcl-panel">
           <h2 class="pcl-panel-title">Weekly Windows</h2>
           <p class="pcl-hint">Weeks close every Tuesday 6:00 PM IST. Points in
             a window count claimed values; the leader uses verified points
-            when a review has landed, projected otherwise.</p>
+            when a review has landed, projected otherwise. The open/close
+            switches for these windows moved to the SETTINGS tab.</p>
           <div class="pcl-scrollx">
             <table class="pcl-table" id="weekTable"></table>
             <datalist id="pclAwardNames"></datalist>
@@ -405,6 +418,7 @@
                 <option value="MATCH">MATCH</option>
                 <option value="MISMATCH">MISMATCH</option>
                 <option value="BOOST?">BOOST?</option>
+                <option value="DUPLICATE">DUPLICATE</option>
               </select>
               <span class="pcl-chevron" aria-hidden="true"></span>
             </div>
@@ -453,6 +467,6 @@
   </div>
 
   <script src="js/gas-endpoint.js?v=20261027c"></script>
-  <script src="js/admin.js?v=20261029a"></script>
+  <script src="js/admin.js?v=20261103a"></script>
 </body>
 </html>
